@@ -1,0 +1,13 @@
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "llm_core"
+version = "0.1.0"
+packages = [
+    { include = "llm_core" },
+]
+
+[tool.maturin] # This points to the Rust crate that provides the native extension.
+manifest-path = "llm_core/core/Cargo.toml" 
