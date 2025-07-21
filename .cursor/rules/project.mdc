@@ -1,0 +1,37 @@
+---
+alwaysApply: true
+---
+### `llm-core` Development & Contribution Guidelines
+
+These rules are designed to maintain the architectural integrity and code quality of the project. All future contributions should adhere to these standards.
+
+1.  **Provider & Model Integration**
+    *   **Encapsulation is Key**: All logic for a new API provider (e.g., a new LLM company) must be contained within its own module in `llm_core/core/src/providers/`.
+    *   **Implement Core Traits**: Every new provider must implement the `ProviderAdapter` and `ResponseParser` traits. The `Adapter` is for formatting requests, and the `Parser` is for normalizing responses into the standard `ResponsePayload`.
+    *   **Register New Providers**: After creating a provider module, it must be registered in `llm_core/core/src/providers/mod.rs` and its `Adapter`/`Parser` must be mapped by name in `orchestra.rs`.
+    *   **Use the Model Catalog**: All new models must be added to `llm_core/core/src/config/models.json`. This file is the single source of truth for model names, API tags, pricing, and capabilities. Do not hardcode this information elsewhere.
+
+2.  **Configuration & Secrets Management**
+    *   **No Hardcoded Secrets**: API keys and other secrets must never be hardcoded. They should be loaded from environment variables using the `.env` file standard.
+    *   **Follow the `env:` Convention**: When adding a new key or URL to `models.json`, its value must be a reference to an environment variable, prefixed with `env:`, like `"env:MY_API_KEY"`.
+    *   **Use the Getter**: Always use the `config::get_env_var` function to retrieve secrets, as it handles the `.env` loading and error reporting.
+
+3.  **Python Bindings and Interoperability**
+    *   **Expose via PyO3**: Any Rust functionality intended for Python users must be exposed using PyO3 macros (`#[pyclass]`, `#[pymethods]`, `#[pyfunction]`).
+    *   **Centralize Bindings**: All Python binding code should reside in `llm_core/core/src/bindings/python_b.rs`.
+    *   **Register in `lib.rs`**: Every new exposed class or function must be added to the module in `llm_core/core/src/lib.rs` to be accessible from Python.
+    *   **Standardize Data Conversion**: Use the provided `json_to_pyobject` and `pyobject_to_json` helpers for converting data between Rust (`serde_json::Value`) and Python objects to ensure consistency.
+    *   **Manage Async in Rust**: For Python methods that call async Rust functions, use a `tokio` runtime within the `PyChat` struct to `block_on` the future. This keeps the Python interface synchronous and simple.
+
+4.  **Error Handling**
+    *   **Centralized Error Type**: All functions within the library should return a `Result` that uses the `LLMCoreError` enum. This provides a single, consistent error type for the entire library.
+    *   **Use `From` Implementations**: Leverage the existing `From<T>` implementations in `error.rs` to ergonomically convert external errors (e.g., from `reqwest`, `serde_json`, `std::io`) into `LLMCoreError`.
+    *   **Be Specific**: When returning an error, choose the most descriptive variant from `LLMCoreError` (e.g., `ApiError` for HTTP errors, `ResponseParseError` for JSON issues).
+
+5.  **Orchestration and Strategy**
+    *   **Stateless `Orchestra`, Stateful `Chat`**: Keep the `Orchestra` struct stateless. It should only be responsible for a single API call transaction. The `Chat` struct in `convo.rs` is responsible for managing state across multiple turns (e.g., conversation history).
+    *   **Intelligent Strategy Selection**: When adding support for a new provider, correctly implement `supports_native_schema` and `supports_tools` in its `ProviderAdapter`. The `Orchestra` relies on these methods to decide whether to use a provider's native features or fall back to the `Lucky` prompting strategy.
+
+6.  **Usage & Cost Tracking**
+    *   **Log Every Turn**: Any function that results in a billable API call (like `Chat::send` or `Sorter::run_sorting_task`) must call `log_usage_turn`.
+    *   **Provide a Clear Label**: When logging usage, provide a descriptive `label` (e.g., "convo with tools", "sort 50 items") to make the usage logs easy to analyze.

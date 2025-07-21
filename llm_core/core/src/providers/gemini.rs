@@ -41,13 +41,13 @@ struct GeminiFunctionResponse {
 
 impl ProviderAdapter for GoogleAdapter {
     fn prepare_request_payload(
-        &self,
-        _model_tag: &str,
-        messages: Vec<Message>,
-        temperature: f32,
-        schema: Option<SimpleSchema>,
-        tools: Option<&Vec<ToolDefinition>>,
-    ) -> JsonValue {
+            &self,
+            _model_tag: &str,
+            messages: Vec<Message>,
+            temperature: f32,
+            schema: Option<SimpleSchema>,
+            tools: Option<&Vec<ToolDefinition>>,
+        ) -> JsonValue {
         let mut system_prompt = String::new();
         let mut regular_messages = Vec::new();
 
@@ -146,6 +146,18 @@ impl ProviderAdapter for GoogleAdapter {
         base_payload
     }
 
+    fn prepare_image_request_payload(&self, prompt: &str, _model_tag: &str) -> JsonValue {
+        json!({
+            "contents": [{
+                "role": "user",
+                "parts": [{"text": prompt}]
+            }],
+            "generationConfig": {
+                "responseModalities": ["TEXT", "IMAGE"]
+            }
+        })
+    }
+
     fn get_request_url(&self, base_url: &str, model_tag: &str, api_key: &str) -> String {
         format!(
             "{}/{}:generateContent?key={}",
@@ -153,6 +165,11 @@ impl ProviderAdapter for GoogleAdapter {
             model_tag,
             api_key
         )
+    }
+
+    fn get_image_request_url(&self, base_url: &str, model_tag: &str, api_key: &str) -> String {
+        // Gemini uses the same `generateContent` endpoint for both text and images.
+        self.get_request_url(base_url, model_tag, api_key)
     }
 
     fn get_request_headers(&self, _api_key: &str) -> reqwest::header::HeaderMap {
@@ -207,6 +224,21 @@ struct GeminiPartResponse {
     text: Option<String>,
     #[serde(default)]
     function_call: Option<GeminiFunctionCall>,
+}
+
+// NEW STRUCT for parsing image data from the response
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ImageGenPartResponse {
+    text: Option<String>,
+    inline_data: Option<GeminiInlineData>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GeminiInlineData {
+    _mime_type: String,
+    data: String,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -285,5 +317,36 @@ impl ResponseParser for GoogleParser {
                 usage
             }),
         })
+    }
+
+    fn parse_image_response(
+            &self,
+            raw_response_text: &str,
+        ) -> Result<(Option<String>, Option<String>), LLMCoreError> {
+        let response_json: JsonValue = serde_json::from_str(raw_response_text)?;
+
+        let parts: Vec<ImageGenPartResponse> = response_json
+            .get("candidates")
+            .and_then(|c| c.get(0))
+            .and_then(|c| c.get("content"))
+            .and_then(|c| c.get("parts"))
+            .and_then(|p| serde_json::from_value(p.clone()).ok())
+            .ok_or_else(|| {
+                LLMCoreError::ResponseParseError("Could not find 'parts' in Gemini image response".to_string())
+            })?;
+
+        let mut text_content = None;
+        let mut image_data = None;
+
+        for part in parts {
+            if let Some(text) = part.text {
+                text_content = Some(text);
+            }
+            if let Some(inline_data) = part.inline_data {
+                image_data = Some(inline_data.data);
+            }
+        }
+
+        Ok((text_content, image_data))
     }
 } 

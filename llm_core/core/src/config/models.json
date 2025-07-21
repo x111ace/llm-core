@@ -14,7 +14,13 @@
                 "input_price": 0.0,
                 "output_price": 0.0,
                 "token_window": 1048576
-            }
+            },
+            "GEMINI 2.0 FLASH IMAGE GEN": {
+                "model_tag": "models/gemini-2.0-flash-preview-image-generation",
+                "input_price": 0.0,
+                "output_price": 0.0,
+                "token_window": 1048576
+            }        
         }
     },
     "Anthropic": {

@@ -6,6 +6,7 @@ use serde_json::Value as JsonValue;
 use tokio::sync::Semaphore;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::io::Write; // Import the Write trait
 use uuid::Uuid;
 use std::fs;
 
@@ -483,14 +484,54 @@ impl Sorter {
         }
 
         if save {
-            // Ensure the output directory exists before writing.
-            fs::create_dir_all(&self.output_path)?;
+            let final_path: PathBuf;
 
-            let file_name = format!("sorted-data-{}.json", Uuid::new_v4().to_string().split('-').next().unwrap_or(""));
-            let mut final_path = self.output_path.clone();
-            final_path.push(file_name);
+            // NEW: Check if the provided path is a file or a directory.
+            if self.output_path.extension().is_some() && self.output_path.file_name().is_some() {
+                // It's a full file path. Use it directly.
+                // Ensure its parent directory exists.
+                if let Some(parent) = self.output_path.parent() {
+                    fs::create_dir_all(parent).map_err(|e| {
+                        LLMCoreError::IoError(std::io::Error::new(
+                            e.kind(),
+                            format!("Failed to create parent directory '{}': {}", parent.display(), e),
+                        ))
+                    })?;
+                }
+                final_path = self.output_path.clone();
+            } else {
+                // It's a directory. Create a unique filename inside it.
+                fs::create_dir_all(&self.output_path).map_err(|e| {
+                     LLMCoreError::IoError(std::io::Error::new(
+                        e.kind(),
+                        format!("Failed to create output directory '{}': {}", self.output_path.display(), e),
+                    ))
+                })?;
+                let file_name = format!("sorted-data-{}.json", Uuid::new_v4().to_string().split('-').next().unwrap_or(""));
+                final_path = self.output_path.join(file_name);
+            }
+
             let json_str = serde_json::to_string_pretty(&categorized_items)?;
-            fs::write(&final_path, json_str)?;
+            
+            // Use OpenOptions for a more robust file write/overwrite operation.
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true) // This will clear the file if it exists, achieving overwrite.
+                .open(&final_path)
+                .map_err(|e| {
+                    LLMCoreError::IoError(std::io::Error::new(
+                        e.kind(),
+                        format!("Failed to open or create file '{}': {}", final_path.display(), e),
+                    ))
+                })?;
+
+            file.write_all(json_str.as_bytes()).map_err(|e| {
+                 LLMCoreError::IoError(std::io::Error::new(
+                    e.kind(),
+                    format!("Failed to write to final path '{}': {}", final_path.display(), e),
+                ))
+            })?;
             println!("\n✅ Results saved: '{}'", final_path.display());
         }
 

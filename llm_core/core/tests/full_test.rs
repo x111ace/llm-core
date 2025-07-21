@@ -24,6 +24,7 @@ use serde_json::Value as JsonValue;
 use std::env;
 use std::path::Path;
 use std::sync::Arc;
+use base64::Engine as _; // Import the Engine trait for base64 decoding
 
 const MODEL_NAME: &str = "GPT 4o MINI";
 
@@ -65,11 +66,18 @@ const MODEL_NAME: &str = "GPT 4o MINI";
 // REMOVED: This function is redundant. We will use the centralized `get_rust_tool_library`.
 
 
+
+
+
+
+
+
+
 // --- Test: Native Tool Mode ---
 // Goal: Verify that the Orchestra can use a model's native tool-calling ability.
 #[tokio::test]
-// #[ignore]
-async fn test_tool_mode() {
+#[ignore]
+async fn test_tooler_mode() {
     println!("\n--- Running Test: Native Tool Mode ({}) ---\n", MODEL_NAME);
     let tool_library = get_rust_tool_library();
 
@@ -381,3 +389,168 @@ async fn test_resume_conversation() {
     println!("\nTest complete. Context was successfully maintained.");
 }
 
+
+
+
+
+
+
+
+
+#[tokio::test]
+#[ignore]
+async fn test_chat_image_gen() {
+    // 1. Set up a chat session with a capable model (GPT 4o Mini) and provide it with our Rust tool library.
+    let mut chat = Chat::new(
+        MODEL_NAME,
+        Some("You are a helpful assistant with access to tools. Your goal is to use the tools to help the user, and then report the results of the tool use.".to_string()),
+        Some(get_rust_tool_library()),
+        None,
+        Some(true), // Enable debug output to see the flow
+    )
+    .expect("Failed to create Chat instance");
+
+    // 2. Simulate a user asking for an image to be generated with a specific path.
+    let output_dir = "C:/Users/ac3la/OneDrive/Desktop/CL-CODER/.learn/databases/llm-core/";
+    let file_name = "mary_poppins.png";
+    let full_path = format!("{}/{}", output_dir, file_name);
+
+    // Clean up any previous run's file to ensure the test is fresh.
+    let _ = std::fs::remove_file(&full_path);
+
+    let user_prompt = format!(
+        "Please create an image of Mary Poppins and save it to '{}'.",
+        full_path
+    );
+    let result = chat.send(&user_prompt).await;
+
+    // 3. Assert that the multi-step operation (user -> tool -> synthesis) was successful.
+    assert!(result.is_ok(), "Chat send failed: {:?}", result.err());
+
+    // 4. Get the final message from the assistant and verify its content.
+    let assistant_message = chat.conversation.messages.last().unwrap();
+    assert_eq!(assistant_message.role, "assistant");
+
+    let content = assistant_message
+        .content
+        .as_ref()
+        .expect("Assistant message should have content");
+
+    println!("Final assistant response: {}", content);
+
+    // 5. Assert that the assistant's response confirms the image was created and provides the path.
+    assert!(content.contains(&file_name));
+
+    // 6. Verify the file exists at the specified path and is not empty.
+    let file_metadata = std::fs::metadata(&full_path)
+        .unwrap_or_else(|_| panic!("File should exist at specified path: {}", full_path));
+    assert!(
+        file_metadata.len() > 0,
+        "Saved image file is empty"
+    );
+}
+
+#[tokio::test]
+#[ignore]
+async fn test_raww_image_gen() {
+    let orchestra = Orchestra::new("GEMINI 2.0 FLASH", None, None, None, Some(true))
+        .expect("Failed to create Orchestra");
+
+    let prompt = "A photorealistic image of a cat wearing a witch hat";
+    let result = orchestra
+        .generate_image(prompt, "GEMINI 2.0 FLASH IMAGE GEN")
+        .await;
+
+    assert!(
+        result.is_ok(),
+        "Image generation failed: {:?}",
+        result.err()
+    );
+    let image_result = result.unwrap();
+    assert!(
+        image_result.image_data_b64.is_some(),
+        "No image data in result"
+    );
+
+    // Decode and save the image to verify it's valid
+    let image_data = image_result.image_data_b64.unwrap();
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(image_data)
+        .expect("Failed to decode base64 image");
+    assert!(!bytes.is_empty(), "Decoded image data is empty");
+
+    let output_dir = "tests/output";
+    std::fs::create_dir_all(output_dir).expect("Failed to create output directory");
+    let file_path = format!("{}/test_image_output.png", output_dir);
+    let mut file = std::fs::File::create(&file_path).expect("Failed to create image file");
+    std::io::Write::write_all(&mut file, &bytes).expect("Failed to write image to file");
+
+    println!("Image saved to {}", file_path);
+    assert!(
+        std::fs::metadata(file_path).unwrap().len() > 0,
+        "Saved image file is empty"
+    );
+}
+
+
+
+
+
+
+
+
+
+#[tokio::test]
+// #[ignore]
+async fn test_sorter_in_chat() {
+    let mut chat = Chat::new(
+        MODEL_NAME,
+        Some("You are a helpful assistant with access to tools. Your goal is to use the tools to help the user, and then report the results of the tool use.".to_string()),
+        Some(get_rust_tool_library()),
+        None,
+        Some(true), // Enable debug output to see the flow
+    )
+    .expect("Failed to create Chat instance");
+
+    // Define a specific output path for the test.
+    let output_path = "tests/output/fruits_and_animals.json";
+    // Clean up any file from a previous test run.
+    let _ = std::fs::remove_file(output_path);
+
+    // Provide a minimal prompt with only the essential information.
+    // The tool should be able to infer the rest.
+    let user_prompt = format!(
+        "Please sort these items and save them to '{}': [apple, cat, dog, banana]",
+        output_path
+    );
+
+    let result = chat.send(&user_prompt).await;
+    assert!(result.is_ok(), "Chat send failed: {:?}", result.err());
+
+    let assistant_message = chat.conversation.messages.last().unwrap();
+    assert_eq!(assistant_message.role, "assistant");
+
+    let content = assistant_message
+        .content
+        .as_ref()
+        .expect("Assistant message should have content");
+    println!("Final assistant response: {}", content);
+
+    // Assert that the AI's response confirms the action and references the output.
+    assert!(content.to_lowercase().contains("sorted"));
+    assert!(content.contains(output_path));
+
+    // Assert that the output file was actually created and contains the correct data.
+    assert!(
+        Path::new(output_path).exists(),
+        "Output file was not created at the specified path."
+    );
+    let file_content = std::fs::read_to_string(output_path)
+        .expect("Failed to read the output file.");
+    let sorted_json: JsonValue = serde_json::from_str(&file_content)
+        .expect("Failed to parse output file as JSON.");
+    
+    // Check for the existence of expected categories.
+    assert!(sorted_json.get("animal").is_some() || sorted_json.get("animals").is_some(), "Category 'animal(s)' should exist.");
+    assert!(sorted_json.get("fruit").is_some() || sorted_json.get("fruits").is_some(), "Category 'fruit(s)' should exist.");
+}

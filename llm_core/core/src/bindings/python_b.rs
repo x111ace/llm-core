@@ -71,11 +71,11 @@ impl PySortingInstructions {
     #[new]
     #[pyo3(signature = (data_item_name, data_profile_description, item_sorting_guidelines, provided_categories = Vec::new()))]
     fn new(
-        data_item_name: &str,
-        data_profile_description: &str,
-        item_sorting_guidelines: Vec<String>,
-        provided_categories: Vec<String>,
-    ) -> Self {
+            data_item_name: &str,
+            data_profile_description: &str,
+            item_sorting_guidelines: Vec<String>,
+            provided_categories: Vec<String>,
+        ) -> Self {
         PySortingInstructions {
             data_item_name: data_item_name.to_string(),
             data_profile_description: data_profile_description.to_string(),
@@ -182,11 +182,11 @@ impl PySchemaProperty {
     #[new]
     #[pyo3(signature = (name, property_type, description, items = None))]
     fn new(
-        name: &str,
-        property_type: &str,
-        description: &str,
-        items: Option<PySchemaItems>,
-    ) -> Self {
+            name: &str,
+            property_type: &str,
+            description: &str,
+            items: Option<PySchemaItems>,
+        ) -> Self {
         PySchemaProperty {
             name: name.to_string(),
             property_type: property_type.to_string(),

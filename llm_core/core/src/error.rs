@@ -38,6 +38,9 @@ pub enum LLMCoreError {
     
     /// An error that occurs when a concurrent task fails to join.
     TaskJoinError(JoinError),
+
+    /// An error that occurs when image generation fails.
+    ImageGenerationError(String),
 }
 
 impl fmt::Display for LLMCoreError {
@@ -53,6 +56,7 @@ impl fmt::Display for LLMCoreError {
             LLMCoreError::ToolExecutionError(msg) => write!(f, "Tool execution error: {}", msg),
             LLMCoreError::ChatError(msg) => write!(f, "Chat session error: {}", msg),
             LLMCoreError::TaskJoinError(err) => write!(f, "Task join error: {}", err),
+            LLMCoreError::ImageGenerationError(msg) => write!(f, "Image generation error: {}", msg),
         }
     }
 }

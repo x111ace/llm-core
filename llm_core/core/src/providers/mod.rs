@@ -3,7 +3,7 @@ use crate::tools::ToolDefinition;
 use crate::lucky::SimpleSchema;
 use crate::error::LLMCoreError;
 
-use serde_json::Value as JsonValue;
+use serde_json::{json, Value as JsonValue};
 use reqwest::header;
 
 /// A trait for provider-specific payload adjustments and request building.
@@ -21,8 +21,25 @@ pub trait ProviderAdapter: Send + Sync {
         tools: Option<&Vec<ToolDefinition>>,
     ) -> JsonValue;
 
+    /// Prepares the payload for an image generation request.
+    fn prepare_image_request_payload(&self, _prompt: &str, _model_tag: &str) -> JsonValue {
+        // Default implementation returns an empty JSON object.
+        // Providers that don't support image generation will effectively do nothing.
+        json!({ "error": "Image generation not supported by this provider." })
+    }
+
     /// Returns the full, provider-specific request URL.
     fn get_request_url(&self, base_url: &str, model_tag: &str, api_key: &str) -> String;
+
+    /// Returns the full URL for an image generation request.
+    /// The default implementation can be a generic endpoint, but providers should override it.
+    fn get_image_request_url(&self, base_url: &str, _model_tag: &str, api_key: &str) -> String {
+        format!(
+            "{}/images/generations?api_key={}",
+            base_url.trim_end_matches('/'),
+            api_key
+        )
+    }
 
     /// Returns the provider-specific request headers, including authentication.
     fn get_request_headers(&self, api_key: &str) -> header::HeaderMap;
@@ -47,6 +64,17 @@ pub trait ResponseParser: Send + Sync {
         input_price: f32,
         output_price: f32,
     ) -> Result<ResponsePayload, LLMCoreError>;
+
+    /// Parses the response from an image generation call into a tuple of (text, image_data).
+    fn parse_image_response(
+            &self,
+            _raw_response_text: &str,
+        ) -> Result<(Option<String>, Option<String>), LLMCoreError> {
+        // Default implementation returns an error.
+        Err(LLMCoreError::ImageGenerationError(
+            "Image generation not supported by this provider's parser.".to_string(),
+        ))
+    }
 }
 
 // We will declare the specific provider modules here as we create them.

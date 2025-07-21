@@ -49,6 +49,16 @@ enum InternalStructuredStrategy {
     None,
 }
 
+/// A new public struct to hold the results of an image generation call.
+#[pyclass]
+#[derive(Debug, Clone)]
+pub struct ImageGenerationResult {
+    #[pyo3(get)]
+    pub text_response: Option<String>,
+    #[pyo3(get)]
+    pub image_data_b64: Option<String>,
+}
+
 /// The main orchestrator for making LLM calls.
 /// This struct holds the configuration for a specific model and provider.
 #[derive(Clone)]
@@ -190,6 +200,58 @@ impl Orchestra {
         })
     }
 
+    /// Generates an image based on a prompt using a specified image model.
+    ///
+    /// This function is separate from the main chat flow and uses the new
+    /// `prepare_image_request_payload` and `parse_image_response` methods
+    /// on the provider adapters.
+    pub async fn generate_image(
+            &self,
+            prompt: &str,
+            image_model_name: &str, // e.g., "GEMINI 2.0 FLASH IMAGE GEN"
+        ) -> Result<ImageGenerationResult, LLMCoreError> {
+        let (_provider_name, _provider_data, model_details) =
+            config::MODEL_LIBRARY.find_model(image_model_name).ok_or_else(|| {
+                LLMCoreError::ConfigError(format!(
+                    "Image model '{}' not found in `models.json`",
+                    image_model_name
+                ))
+            })?;
+        
+        // We can reuse the existing provider adapter and parser from the Orchestra instance
+        // as long as the image model belongs to the same provider. This is a reasonable
+        // assumption for now.
+
+        let url = self.provider_adapter.get_image_request_url(
+            &self.base_url,
+            &model_details.model_tag,
+            &self.api_key,
+        );
+        let headers = self.provider_adapter.get_request_headers(&self.api_key);
+        let payload = self.provider_adapter
+            .prepare_image_request_payload(prompt, &model_details.model_tag);
+
+        if self.debug {
+            println!("[ORCHESTRA DEBUG] Image generation payload: {:?}", payload);
+        }
+
+        let response_text =
+            client::execute_single_call(url, headers, payload, &self.retry_policy).await?;
+        
+        if self.debug {
+            println!("[ORCHESTRA DEBUG] Raw image response: {}", response_text);
+        }
+
+        let (text_response, image_data_b64) = self
+            .response_parser
+            .parse_image_response(&response_text)?;
+            
+        Ok(ImageGenerationResult {
+            text_response,
+            image_data_b64,
+        })
+    }
+
     pub fn model_tag(&self) -> &str {
         &self.model_tag
     }
@@ -324,8 +386,8 @@ impl Orchestra {
             initial_payload: ResponsePayload,
             mut messages: Vec<Message>,
         ) -> Result<ResponsePayload, LLMCoreError> {
-        let tool_library = match &self.tool_strategy {
-            InternalToolStrategy::Payload(lib) | InternalToolStrategy::Lucky(lib, _) => Some(lib.as_ref()),
+        let tool_library_arc = match &self.tool_strategy {
+            InternalToolStrategy::Payload(lib) | InternalToolStrategy::Lucky(lib, _) => Some(lib),
             InternalToolStrategy::None => None,
         };
 
@@ -340,11 +402,11 @@ impl Orchestra {
             has_native_call || has_granite_call || has_lucky_call
         });
         
-        if !has_tool_calls || tool_library.is_none() {
+        if !has_tool_calls || tool_library_arc.is_none() {
             return Ok(initial_payload);
         }
         
-        let tool_library = tool_library.unwrap();
+        let tool_library = tool_library_arc.unwrap();
         let mut assistant_message = initial_payload.choices.get(0).unwrap().message.clone();
         
         // --- Extract and Execute Tool Calls ---
@@ -355,7 +417,13 @@ impl Orchestra {
             messages.push(assistant_message.clone()); // Add the full assistant message to history.
             let tool_calls = assistant_message.tool_calls.take().unwrap(); // Now take the tool calls to run them.
             for call in tool_calls {
-                let result = Self::execute_tool(tool_library, &call.function.name, call.function.arguments);
+                let result = self
+                    .execute_tool(
+                        Arc::clone(tool_library),
+                        &call.function.name,
+                        call.function.arguments,
+                    )
+                    .await;
                 messages.push(format_tool_message(result, call.id, call.function.name));
             }
         } else if let Some(content) = assistant_message.content.take() {
@@ -365,10 +433,13 @@ impl Orchestra {
                 messages.push(assistant_message); // Add assistant's turn to history
                 if let Some(json_start) = content_trimmed.find('[') {
                     let json_part = &content_trimmed[json_start..];
-                    if let Ok(calls) = serde_json::from_str::<Vec<crate::tools::FunctionCall>>(json_part) {
+                    if let Ok(calls) = serde_json::from_str::<Vec<crate::tools::FunctionCall>>(json_part)
+                    {
                         for call in calls {
                             let tool_id = format!("granite-tool-{}", uuid::Uuid::new_v4());
-                            let result = Self::execute_tool(tool_library, &call.name, call.arguments);
+                            let result = self
+                                .execute_tool(Arc::clone(tool_library), &call.name, call.arguments)
+                                .await;
                             messages.push(format_tool_message(result, tool_id, call.name));
                         }
                     }
@@ -392,7 +463,9 @@ impl Orchestra {
                 
                 let tool_id = format!("lucky-tool-{}", uuid::Uuid::new_v4());
                 
-                let result = Self::execute_tool(tool_library, &name, args.clone());
+                let result = self
+                    .execute_tool(Arc::clone(tool_library), &name, args.clone())
+                    .await;
                 
                 // Add assistant's "thought" (the tool call) and the result to history
                 messages.push(Message { role: "assistant".to_string(), tool_calls: Some(vec![crate::tools::ToolCall { id: tool_id.clone(), tool_type: "function".to_string(), function: crate::tools::FunctionCall { name: name.clone(), arguments: args }}]), ..Default::default()});
@@ -432,41 +505,55 @@ impl Orchestra {
     }
 
     /// Executes a single tool function and returns the result as a string.
-    fn execute_tool(library: &ToolLibrary, name: &str, args: JsonValue) -> String {
-        println!("[ORCHESTRA DEBUG] Executing tool: {}", name);
-        match library.get(name) {
-            Some(tool) => match tool {
-                Tool::Rust { function, .. } => match function(args) {
-                    Ok(res) => serde_json::to_string(&res).unwrap_or_else(|e| e.to_string()),
-                    Err(e) => e,
-                },
-                Tool::Python { function, .. } => Python::with_gil(|py| {
-                    let py_args = match bindings::python_b::json_to_pyobject(py, &args) {
-                        Ok(a) => a,
-                        Err(e) => return format!("Failed to convert arguments to Python: {}", e),
-                    };
-
-                    let py_kwargs: &Bound<PyDict> =
-                        match py_args.downcast_bound(py) {
-                            Ok(kwargs) => kwargs,
-                            Err(_) => {
-                                return "Tool arguments must be a JSON object (dict in Python)"
-                                    .to_string()
-                            }
+    /// This is now async and uses `spawn_blocking` to avoid stalling the runtime.
+    async fn execute_tool(&self, library: Arc<ToolLibrary>, name: &str, args: JsonValue) -> String {
+        let tool_name = name.to_string();
+        let debug_mode = self.debug;
+    
+        // Use spawn_blocking to run the synchronous tool code on a dedicated thread.
+        let result = tokio::task::spawn_blocking(move || {
+            if debug_mode {
+                println!("[ORCHESTRA DEBUG] Executing tool: {}", &tool_name);
+            }
+            match library.get(&tool_name) {
+                Some(tool) => match tool {
+                    Tool::Rust { function, .. } => match function(args) {
+                        Ok(res) => serde_json::to_string(&res).unwrap_or_else(|e| e.to_string()),
+                        Err(e) => e,
+                    },
+                    Tool::Python { function, .. } => Python::with_gil(|py| {
+                        let py_args = match bindings::python_b::json_to_pyobject(py, &args) {
+                            Ok(a) => a,
+                            Err(e) => return format!("Failed to convert arguments to Python: {}", e),
                         };
-
-                    match function.call_bound(py, (), Some(py_kwargs)) {
-                        Ok(result) => {
-                           match bindings::python_b::pyobject_to_json(py, &result) {
-                                Ok(json_val) => serde_json::to_string(&json_val).unwrap_or_else(|e| format!("Failed to serialize tool result: {}", e)),
-                                Err(e) => format!("Failed to convert Python tool result to JSON: {}", e),
+    
+                        let py_kwargs: &Bound<PyDict> =
+                            match py_args.downcast_bound(py) {
+                                Ok(kwargs) => kwargs,
+                                Err(_) => {
+                                    return "Tool arguments must be a JSON object (dict in Python)"
+                                        .to_string()
+                                }
+                            };
+    
+                        match function.call_bound(py, (), Some(py_kwargs)) {
+                            Ok(result) => {
+                               match bindings::python_b::pyobject_to_json(py, &result) {
+                                    Ok(json_val) => serde_json::to_string(&json_val).unwrap_or_else(|e| format!("Failed to serialize tool result: {}", e)),
+                                    Err(e) => format!("Failed to convert Python tool result to JSON: {}", e),
+                                }
                             }
+                            Err(e) => format!("Python tool execution failed: {}", e),
                         }
-                        Err(e) => format!("Python tool execution failed: {}", e),
-                    }
-                }),
-            },
-            None => format!("Tool '{}' not found in library.", name),
+                    }),
+                },
+                None => format!("Tool '{}' not found in library.", &tool_name),
+            }
+        }).await;
+    
+        match result {
+            Ok(s) => s,
+            Err(e) => format!("Tool panicked during execution: {}", e),
         }
     }
 

@@ -20,7 +20,8 @@ pyo3 = { version = "0.22.6", features = ["extension-module", "serde"] }
 tokio = { version = "1.46.1", features = ["full"] }
 
 # HTTP client for making API calls
-reqwest = { version = "0.12.22", features = ["json", "rustls-tls"], default-features = false }
+reqwest = { version = "0.12.22", features = ["json", "rustls-tls", "blocking"], default-features = false }
+base64 = "0.22.1"
 
 # Serialization and deserialization
 serde = { version = "1.0.219", features = ["derive"] }
