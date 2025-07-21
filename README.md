@@ -10,6 +10,7 @@ Basic Ability:
 - Token Usage Tracker
 - Async Swarm Calling
 - Data Sorter Feature
+- Custom Thinker Mode
 
 Agent Ability:
 - Structured Response

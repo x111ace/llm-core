@@ -26,7 +26,7 @@ use std::path::Path;
 use std::sync::Arc;
 use base64::Engine as _; // Import the Engine trait for base64 decoding
 
-const MODEL_NAME: &str = "GPT 4o MINI";
+const MODEL_NAME: &str = "GEMINI 2.0 FLASH";
 
 // CONCLUSIONS:
 // All models here have been tested. Of them, only deepseek (OpenRouter & Ollama) have failed.
@@ -73,33 +73,83 @@ const MODEL_NAME: &str = "GPT 4o MINI";
 
 
 
-// --- Test: Native Tool Mode ---
-// Goal: Verify that the Orchestra can use a model's native tool-calling ability.
+// --- Test: Normal Chat Mode ---
+// Goal: Verify that the Orchestra works for simple, non-structured chat.
 #[tokio::test]
 #[ignore]
-async fn test_tooler_mode() {
-    println!("\n--- Running Test: Native Tool Mode ({}) ---\n", MODEL_NAME);
-    let tool_library = get_rust_tool_library();
+async fn test_normal_mode() {
+    println!("\n--- Running Test: Normal Chat Mode ({}) ---\n", MODEL_NAME);
 
     let orchestra = Orchestra::new(
         MODEL_NAME, 
-        Some(0.0), 
-        Some(tool_library), 
+        Some(0.7), 
+        None, 
+        None,
         None,
         None
     ).unwrap();
-    let messages = vec![format_user_message("What time is it?".to_string())];
+    let messages = vec![format_user_message(
+        "Hello! In one short sentence, what is Rust?".to_string(),
+    )];
     let response = orchestra.call_ai(messages).await.unwrap();
 
     let content = response.choices[0].message.content.as_ref().unwrap();
-    println!("Final synthesized response: {}", content);
+    println!("Standard chat response: {}", content);
 
-    let content_lower = content.to_lowercase();
-    assert!(!content_lower.contains("tool_calls"));
-    assert!(
-        content_lower.contains(":") && (content_lower.contains("am") || content_lower.contains("pm")),
-        "Final response should contain the synthesized time from the tool."
-    );
+    assert!(!content.is_empty(), "Response should not be empty.");
+
+    // Updated assertion: The response should not be a JSON object or array.
+    // A simple JSON string (a sentence in quotes) is acceptable.
+    match serde_json::from_str::<JsonValue>(content) {
+        Ok(json_val) => {
+            assert!(
+                !json_val.is_object() && !json_val.is_array(),
+                "Response should be plain text, not a JSON object or array."
+            );
+        }
+        Err(_) => {
+            // If it fails to parse as JSON, it's definitely plain text, which is a pass.
+        }
+    }
+}
+
+// --- Test: Thinking Mode (Prompt-Induced) ---
+// Goal: Verify that a standard model can be prompted to produce reasoning content.
+#[tokio::test]
+// #[ignore]
+async fn test_thinking_mode() {
+    println!("\n--- Running Test: Thinking Mode ({}) ---\n", MODEL_NAME);
+
+    // 1. Create a chat session with thinking_mode explicitly enabled.
+    let mut chat = Chat::new(
+        MODEL_NAME,
+        Some("You are a helpful assistant.".to_string()),
+        None,
+        None,
+        Some(true), // Enable thinking mode
+        Some(true), // Enable debug output
+    )
+    .unwrap();
+
+    // 2. Send a prompt that requires some thought.
+    let response_message = chat.send("Yooo dude, whatsup?").await.unwrap();
+
+    // 3. Assert that both reasoning and content were produced.
+    let reasoning = response_message.reasoning_content.as_ref();
+    let content = response_message.content.as_ref();
+
+    println!("Reasoning: {:?}", reasoning.unwrap_or(&"No reasoning content found.".to_string()));
+    println!("Final Response: {}", content.unwrap());
+
+    assert!(reasoning.is_some(), "Should have reasoning content.");
+    assert!(!reasoning.unwrap().is_empty(), "Reasoning content should not be empty.");
+    
+    assert!(content.is_some(), "Should have final response content.");
+    assert!(!content.unwrap().is_empty(), "Final response content should not be empty.");
+
+    // 4. Assert that the thinking tags are not present in the final output.
+    assert!(!reasoning.unwrap().to_lowercase().contains("<think>"));
+    assert!(!content.unwrap().to_lowercase().contains("<think>"));
 }
 
 // --- Test: Native Schema Mode ---
@@ -139,6 +189,7 @@ async fn test_schema_mode() {
         Some(0.0), 
         None, 
         Some(schema),
+        None,
         None
     ).unwrap();
     let messages = vec![format_user_message("My name is Alex and I'm 34 years old.".to_string())];
@@ -150,6 +201,36 @@ async fn test_schema_mode() {
 
     assert_eq!(details.name.to_lowercase(), "alex");
     assert_eq!(details.age, 34);
+}
+
+// --- Test: Native Tool Mode ---
+// Goal: Verify that the Orchestra can use a model's native tool-calling ability.
+#[tokio::test]
+#[ignore]
+async fn test_tooler_mode() {
+    println!("\n--- Running Test: Native Tool Mode ({}) ---\n", MODEL_NAME);
+    let tool_library = get_rust_tool_library();
+
+    let orchestra = Orchestra::new(
+        MODEL_NAME, 
+        Some(0.0), 
+        Some(tool_library), 
+        None,
+        None,
+        None
+    ).unwrap();
+    let messages = vec![format_user_message("What time is it?".to_string())];
+    let response = orchestra.call_ai(messages).await.unwrap();
+
+    let content = response.choices[0].message.content.as_ref().unwrap();
+    println!("Final synthesized response: {}", content);
+
+    let content_lower = content.to_lowercase();
+    assert!(!content_lower.contains("tool_calls"));
+    assert!(
+        content_lower.contains(":") && (content_lower.contains("am") || content_lower.contains("pm")),
+        "Final response should contain the synthesized time from the tool."
+    );
 }
 
 // --- Test: Automatic Lucky Fallback (Sorter Mode) ---
@@ -182,6 +263,7 @@ async fn test_sorter_mode() {
         Some(0.0), 
         None, 
         Some(sorter_schema),
+        None,
         None
     ).unwrap();
     
@@ -222,46 +304,6 @@ async fn test_sorter_mode() {
     assert_eq!(sort_result.category, "technology");
 }
 
-// --- Test: Normal Chat Mode ---
-// Goal: Verify that the Orchestra works for simple, non-structured chat.
-#[tokio::test]
-#[ignore]
-async fn test_normal_mode() {
-    println!("\n--- Running Test: Normal Chat Mode ({}) ---\n", MODEL_NAME);
-
-    let orchestra = Orchestra::new(
-        MODEL_NAME, 
-        Some(0.7), 
-        None, 
-        None,
-        None
-    ).unwrap();
-    let messages = vec![format_user_message(
-        "Hello! In one short sentence, what is Rust?".to_string(),
-    )];
-    let response = orchestra.call_ai(messages).await.unwrap();
-
-    let content = response.choices[0].message.content.as_ref().unwrap();
-    println!("Standard chat response: {}", content);
-
-    assert!(!content.is_empty(), "Response should not be empty.");
-
-    // Updated assertion: The response should not be a JSON object or array.
-    // A simple JSON string (a sentence in quotes) is acceptable.
-    match serde_json::from_str::<JsonValue>(content) {
-        Ok(json_val) => {
-            assert!(
-                !json_val.is_object() && !json_val.is_array(),
-                "Response should be plain text, not a JSON object or array."
-            );
-        }
-        Err(_) => {
-            // If it fails to parse as JSON, it's definitely plain text, which is a pass.
-        }
-    }
-}
-
-
 
 
 
@@ -282,6 +324,7 @@ async fn test_conversation_mode() {
     let mut chat = Chat::new(
         MODEL_NAME,
         Some("You are a helpful assistant who remembers details from the conversation.".to_string()),
+        None,
         None,
         None,
         None,
@@ -356,7 +399,7 @@ async fn test_resume_conversation() {
 
     // 2. Resume the chat session from the file
     println!("Phase 1: Resuming chat from {}...", resume_file_path);
-    let mut chat = Chat::from_file(resume_path, None, None, None).unwrap();
+    let mut chat = Chat::from_file(resume_path, None, None, None, None).unwrap();
 
     // Verify the initial state
     assert_eq!(chat.conversation.messages.len(), 7, "Should have loaded 7 messages from the file.");
@@ -406,6 +449,7 @@ async fn test_chat_image_gen() {
         Some("You are a helpful assistant with access to tools. Your goal is to use the tools to help the user, and then report the results of the tool use.".to_string()),
         Some(get_rust_tool_library()),
         None,
+        None, // thinking_mode
         Some(true), // Enable debug output to see the flow
     )
     .expect("Failed to create Chat instance");
@@ -453,7 +497,7 @@ async fn test_chat_image_gen() {
 #[tokio::test]
 #[ignore]
 async fn test_raww_image_gen() {
-    let orchestra = Orchestra::new("GEMINI 2.0 FLASH", None, None, None, Some(true))
+    let orchestra = Orchestra::new("GEMINI 2.0 FLASH", None, None, None, None, Some(true))
         .expect("Failed to create Orchestra");
 
     let prompt = "A photorealistic image of a cat wearing a witch hat";
@@ -501,13 +545,14 @@ async fn test_raww_image_gen() {
 
 
 #[tokio::test]
-// #[ignore]
+#[ignore]
 async fn test_sorter_in_chat() {
     let mut chat = Chat::new(
         MODEL_NAME,
         Some("You are a helpful assistant with access to tools. Your goal is to use the tools to help the user, and then report the results of the tool use.".to_string()),
         Some(get_rust_tool_library()),
         None,
+        None, // thinking_mode
         Some(true), // Enable debug output to see the flow
     )
     .expect("Failed to create Chat instance");

@@ -6,6 +6,7 @@ use crate::error::LLMCoreError;
 use super::{ProviderAdapter, ResponseParser};
 use serde_json::{json, Value as JsonValue};
 use reqwest::header;
+use regex::Regex;
 
 /// Adapter for the OpenRouter API.
 pub struct OpenRouterAdapter;
@@ -21,6 +22,8 @@ impl ProviderAdapter for OpenRouterAdapter {
         temperature: f32,
         schema: Option<SimpleSchema>,
         tools: Option<&Vec<ToolDefinition>>,
+        _thinking_mode: bool,
+        _debug: bool,
     ) -> JsonValue {
         let mut payload = json!({
             "model": model_tag,
@@ -123,16 +126,30 @@ impl ResponseParser for OpenRouterParser {
 
         if let Some(raw_choices) = raw_json.get("choices").and_then(|c| c.as_array()) {
             for (i, choice) in payload.choices.iter_mut().enumerate() {
-                if let Some(raw_choice) = raw_choices.get(i) {
-                    if let Some(message) = raw_choice.get("message") {
-                        let reasoning_content = message
-                            .get("reasoning")
-                            .or_else(|| message.get("reasoning_content"))
-                            .and_then(|r| r.as_str().map(|s| s.trim().to_string()))
-                            .filter(|s| !s.is_empty());
+                // First, handle prompt-induced <think> tags.
+                if let Some(content) = &mut choice.message.content {
+                    let think_re = Regex::new(r"(?is)<think>(.*)</think>").unwrap();
+                    if let Some(captures) = think_re.captures(content) {
+                        if let Some(thought) = captures.get(1) {
+                            choice.message.reasoning_content = Some(thought.as_str().trim().to_string());
+                        }
+                        *content = think_re.replace(content, "").trim().to_string();
+                    }
+                }
+                
+                // Then, check for native reasoning content if none was found via tags.
+                if choice.message.reasoning_content.is_none() {
+                    if let Some(raw_choice) = raw_choices.get(i) {
+                        if let Some(message) = raw_choice.get("message") {
+                            let reasoning_content = message
+                                .get("reasoning")
+                                .or_else(|| message.get("reasoning_content"))
+                                .and_then(|r| r.as_str().map(|s| s.trim().to_string()))
+                                .filter(|s| !s.is_empty());
 
-                        if reasoning_content.is_some() {
-                            choice.message.reasoning_content = reasoning_content;
+                            if reasoning_content.is_some() {
+                                choice.message.reasoning_content = reasoning_content;
+                            }
                         }
                     }
                 }

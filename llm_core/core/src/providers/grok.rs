@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value as JsonValue};
 use std::collections::HashSet;
 use reqwest::header;
+use regex::Regex;
 
 /// Adapter for the xAI Grok API.
 pub struct GrokAdapter;
@@ -42,6 +43,8 @@ impl ProviderAdapter for GrokAdapter {
         temperature: f32,
         schema: Option<SimpleSchema>,
         tools: Option<&Vec<ToolDefinition>>,
+        _thinking_mode: bool,
+        _debug: bool,
     ) -> JsonValue {
         let reasoner_models = get_reasoner_models();
         let reasoning_effort = if reasoner_models.contains(model_tag) {
@@ -189,10 +192,26 @@ impl ResponseParser for GrokParser {
         if let Some(candidates) = grok_response.choices {
             for grok_choice_opt in candidates {
                 if let Some(grok_choice) = grok_choice_opt {
+                    let mut message_content = grok_choice.message.content;
+                    let mut reasoning_content = grok_choice.message.reasoning_content;
+
+                    // Handle prompt-induced reasoning tags if native reasoning is absent.
+                    if reasoning_content.is_none() {
+                        if let Some(content) = &mut message_content {
+                            let think_re = Regex::new(r"(?is)<think>(.*)</think>").unwrap();
+                            if let Some(captures) = think_re.captures(content) {
+                                if let Some(thought) = captures.get(1) {
+                                    reasoning_content = Some(thought.as_str().trim().to_string());
+                                }
+                                *content = think_re.replace(content, "").trim().to_string();
+                            }
+                        }
+                    }
+                    
                     let message = Message {
                         role: grok_choice.message.role.clone(), // Use the role from the response
-                        content: grok_choice.message.content,
-                        reasoning_content: grok_choice.message.reasoning_content,
+                        content: message_content,
+                        reasoning_content,
                         tool_calls: grok_choice
                             .message
                             .tool_calls

@@ -7,6 +7,7 @@ use super::{ProviderAdapter, ResponseParser};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value as JsonValue};
 use reqwest::header;
+use regex::Regex;
 
 /// Adapter for the OpenAI API.
 pub struct OpenAIAdapter;
@@ -22,6 +23,8 @@ impl ProviderAdapter for OpenAIAdapter {
             temperature: f32,
             schema: Option<SimpleSchema>,
             tools: Option<&Vec<ToolDefinition>>,
+            _thinking_mode: bool,
+            _debug: bool,
         ) -> JsonValue {
         // OpenAI expects tool_call arguments to be a string. We must re-serialize
         // our internal JSON object representation before sending it back.
@@ -162,6 +165,17 @@ impl ResponseParser for OpenAIParser {
         let mut payload: ResponsePayload = serde_json::from_str(raw_response_text)?;
 
         if let Some(choice) = payload.choices.get_mut(0) {
+            // NEW: Handle prompt-induced reasoning by parsing <think> tags.
+            if let Some(content) = &mut choice.message.content {
+                let think_re = Regex::new(r"(?is)<think>(.*)</think>").unwrap();
+                if let Some(captures) = think_re.captures(content) {
+                    if let Some(thought) = captures.get(1) {
+                        choice.message.reasoning_content = Some(thought.as_str().trim().to_string());
+                    }
+                    *content = think_re.replace(content, "").trim().to_string();
+                }
+            }
+
             // OpenAI returns tool arguments as a stringified JSON. We must parse it.
             if let Some(tool_calls) = &mut choice.message.tool_calls {
                 for call in tool_calls {

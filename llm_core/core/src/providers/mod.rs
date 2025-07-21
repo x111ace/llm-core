@@ -19,6 +19,8 @@ pub trait ProviderAdapter: Send + Sync {
         temperature: f32,
         schema: Option<SimpleSchema>,
         tools: Option<&Vec<ToolDefinition>>,
+        thinking_mode: bool,
+        debug: bool,
     ) -> JsonValue;
 
     /// Prepares the payload for an image generation request.

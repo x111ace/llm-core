@@ -18,7 +18,7 @@ from llm_core import (
     SortingInstructions,
 )
 
-MODEL_NAME = "GEMINI 2.0 FLASH"
+MODEL_NAME = "GPT 4o MINI"
 
 
 
@@ -113,6 +113,7 @@ def init_chat(
         native_tools: bool = False,
         extra_tools: list = None,
         schema: SimpleSchema = None,
+        thinking_mode: bool = False,
         debug_out: bool = False
     ):
     try:
@@ -125,6 +126,7 @@ def init_chat(
             native_tools=native_tools,
             extra_tools=extra_tools,
             schema=schema,
+            thinking_mode=thinking_mode,
             debug_out=debug_out
         )
         return chat_session
@@ -140,6 +142,7 @@ def chat_wrap(
         native_tools: bool = False,
         extra_tools: list = None,
         schema: SimpleSchema = None,
+        thinking_mode: bool = False,
         debug_out: bool = False
     ):
     chat_session = init_chat(
@@ -148,6 +151,7 @@ def chat_wrap(
         native_tools=native_tools,
         extra_tools=extra_tools,
         schema=schema,
+        thinking_mode=thinking_mode,
         debug_out=debug_out
     )
     if not chat_session:
@@ -168,6 +172,8 @@ def chat_loop(chat_session: Chat):
                 continue
 
             assistant_message = chat_session.send(user_prompt)
+            if assistant_message.reasoning_content:
+                print(f"THINK: {assistant_message.reasoning_content.strip()}")
             if assistant_message and assistant_message.content:
                 print(f"AGENT: {assistant_message.content.strip()}")
 
@@ -398,16 +404,16 @@ def tester_chat():
         "Provide a sentence with a name and age for the agent to extract." + "\n"
     ); chat_wrap(
         model_name=MODEL_NAME,
-        # tools=
-        # debug_out=True
+        thinking_mode=True,
+        debug_out=True
     )
 
 if __name__ == "__main__":
     # Choose which test to run.
 
-    # tester_chat()
     # basics_chat()
     # schema_chat()
     # data_sorter()
+    # tooler_chat()
 
-    tooler_chat()
+    tester_chat()

@@ -8,6 +8,7 @@ use serde_json::{json, Value as JsonValue};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet; // Added for HashSet
 use reqwest::header;
+use regex::Regex;
 
 /// Adapter for the Ollama API.
 pub struct OllamaAdapter;
@@ -60,10 +61,16 @@ impl ProviderAdapter for OllamaAdapter {
             temperature: f32,
             schema: Option<SimpleSchema>,
             tools: Option<&Vec<ToolDefinition>>,
+            thinking_mode: bool,
+            _debug: bool,
         ) -> JsonValue {
-        let mut request_options = OllamaRequestOptions {
+        let request_options = OllamaRequestOptions {
             temperature,
-            think: None,
+            think: if standard_ollama_think_supported_models().contains(model_tag) {
+                Some(thinking_mode)
+            } else {
+                None
+            },
         };
 
         // --- Granite-specific Tool Calling ---
@@ -153,11 +160,6 @@ impl ProviderAdapter for OllamaAdapter {
         let mut final_tools_vec = tools.cloned();
         let mut format_option: Option<String> = None;
         let mut tool_choice_option: Option<String> = None;
-
-        // Qwen models support a 'think' option. We disable it for deterministic JSON output.
-        if standard_ollama_think_supported_models().contains(model_tag) {
-            request_options.think = Some(false);
-        }
 
         // Models like Qwen support the standard 'tools' array in the payload.
         if standard_ollama_tool_supported_models().contains(model_tag) {
@@ -324,12 +326,18 @@ impl ResponseParser for OllamaParser {
             }
         }
         
-        // NEW: Strip <think> blocks from the content.
-        // Some models like Qwen add chain-of-thought blocks that interfere with JSON parsing.
+        let mut reasoning_content: Option<String> = None;
+
+        // NEW (Corrected): Extract <think> blocks and place them in `reasoning_content`.
         if let Some(content) = &mut ollama_response.message.content {
-            if let Some(end) = content.rfind("</think>") {
-                // Extract the part after the think block.
-                *content = content[end + "</think>".len()..].trim().to_string();
+            // Use regex to be more robust.
+            let think_re = Regex::new(r"(?is)<think>(.*)</think>").unwrap();
+            if let Some(captures) = think_re.captures(content) {
+                if let Some(thought) = captures.get(1) {
+                    reasoning_content = Some(thought.as_str().trim().to_string());
+                }
+                // Remove the entire think block from the original content, leaving the rest.
+                *content = think_re.replace(content, "").trim().to_string();
             }
         }
         
@@ -366,6 +374,7 @@ impl ResponseParser for OllamaParser {
                     })
                     .collect()
             }),
+            reasoning_content,
             ..Default::default()
         };
 

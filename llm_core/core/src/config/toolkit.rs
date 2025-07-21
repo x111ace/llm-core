@@ -169,7 +169,7 @@ pub fn get_rust_tool_library() -> ToolLibrary {
             let swarm_size = args["swarm_size"].as_u64().unwrap_or(5) as usize;
             
             let orchestra = Arc::new(
-                Orchestra::new(model_name, None, None, None, Some(true))
+                Orchestra::new(model_name, None, None, None, None, Some(true))
                     .map_err(|e| e.to_string())?,
             );
 

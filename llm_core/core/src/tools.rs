@@ -5,18 +5,43 @@ use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 
 /// Represents a tool call requested by the model in its response.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[pyclass]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ToolCall {
+    #[pyo3(get, set)]
     pub id: String,
+    #[pyo3(get, set)]
     #[serde(rename = "type")]
     pub tool_type: String, // e.g., "function"
+    #[pyo3(get, set)]
     pub function: FunctionCall,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[pyclass]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct FunctionCall {
+    #[pyo3(get, set)]
     pub name: String,
-    pub arguments: JsonValue, // Changed from String to JsonValue
+    // This field cannot be exposed directly. We use custom getter/setter methods.
+    pub arguments: JsonValue,
+}
+
+#[pymethods]
+impl FunctionCall {
+    #[getter]
+    fn get_arguments(&self, py: Python) -> PyResult<PyObject> {
+        serde_pyobject::to_pyobject(py, &self.arguments)
+            .map(|bound| bound.into())
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
+    }
+
+    #[setter]
+    fn set_arguments(&mut self, py: Python, value: PyObject) -> PyResult<()> {
+        let bound_value = value.bind(py);
+        self.arguments = serde_pyobject::from_pyobject(bound_value.clone())
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+        Ok(())
+    }
 }
 
 /// Defines the structure for a tool that can be provided to an AI model.

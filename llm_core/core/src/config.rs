@@ -10,14 +10,28 @@ pub use toolkit::get_rust_tool_library;
 
 // --- Data Structures for models.json ---
 
+/// An enum to represent the different reasoning capabilities of a model.
+#[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum ReasoningCapability {
+    Always,
+    Toggle,
+    #[default]
+    PromptInducible,
+}
+
+/// Holds the specific details for an individual AI model.
 #[derive(Deserialize, Debug, Clone)]
 pub struct ModelDetails {
     pub model_tag: String,
     pub input_price: f32,
     pub output_price: f32,
     pub token_window: u32,
+    #[serde(rename = "reasoning", default)]
+    pub reasoning_capability: ReasoningCapability,
 }
 
+/// Holds the configuration for a specific provider, including API keys and models.
 #[derive(Deserialize, Debug, Clone)]
 pub struct ProviderConfig {
     pub api_key: String,

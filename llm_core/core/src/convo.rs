@@ -84,6 +84,7 @@ impl Default for Conversation {
 pub struct Chat {
     pub orchestra: Orchestra,
     pub conversation: Conversation,
+    pub thinking_mode: bool,
     // Add fields to track whether tools or schema are being used.
     has_tools: bool,
     has_schema: bool,
@@ -101,11 +102,13 @@ impl Chat {
             system_prompt: Option<String>,
             tools: Option<ToolLibrary>,
             schema: Option<SimpleSchema>,
+            thinking_mode: Option<bool>,
             debug_out: Option<bool>,
         ) -> Result<Self, LLMCoreError> {
         let has_tools = tools.is_some();
         let has_schema = schema.is_some();
-        let orchestra = Orchestra::new(model_name, None, tools, schema, debug_out)?;
+        let orchestra = Orchestra::new(model_name, None, tools, schema, thinking_mode, debug_out)?;
+        let final_thinking_mode = orchestra.thinking_mode(); // Get the final state from Orchestra
         let mut conversation = Conversation::new(orchestra.user_facing_model_name.clone());
 
         if let Some(prompt) = system_prompt {
@@ -117,6 +120,7 @@ impl Chat {
         Ok(Self {
             orchestra,
             conversation,
+            thinking_mode: final_thinking_mode,
             has_tools,
             has_schema,
         })
@@ -134,6 +138,7 @@ impl Chat {
             path: &Path,
             model_name: Option<&str>,
             tools: Option<ToolLibrary>,
+            thinking_mode: Option<bool>,
             debug_out: Option<bool>,
         ) -> Result<Self, LLMCoreError> {
         let conversation = Conversation::load(path)?;
@@ -142,11 +147,13 @@ impl Chat {
         // Use the provided model name, or default to the one stored in the conversation file.
         let final_model_name = model_name.unwrap_or(&conversation.model_name);
 
-        let orchestra = Orchestra::new(final_model_name, None, tools, None, debug_out)?;
+        let orchestra = Orchestra::new(final_model_name, None, tools, None, thinking_mode, debug_out)?;
+        let final_thinking_mode = orchestra.thinking_mode();
 
         Ok(Self {
             orchestra,
             conversation,
+            thinking_mode: final_thinking_mode,
             has_tools,
             has_schema: false, // Schema cannot be resumed from a file in this implementation.
         })

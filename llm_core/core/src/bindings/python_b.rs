@@ -1,4 +1,5 @@
 use pyo3::{prelude::*, types::{PyDict, PyList}};
+use pyo3::{pyclass, pymethods, BoundObject, PyErr, PyObject, PyResult, Python};
 use serde_json::Value as JsonValue;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -111,7 +112,7 @@ pub fn run_sorter(
     let job_id = Uuid::new_v4();
     
     let result = rt.block_on(async {
-        let orchestra = Orchestra::new(model_name, None, None, None, Some(debug_out))?;
+        let orchestra = Orchestra::new(model_name, None, None, None, None, Some(debug_out))?;
         let rust_instructions = SortingInstructions {
             data_item_name: instructions.data_item_name,
             data_profile_description: instructions.data_profile_description,
@@ -136,11 +137,11 @@ pub fn run_sorter(
                 eprintln!("[WARNING] Failed to log sorter usage: {}", e);
             }
             Python::with_gil(|py| {
-                let dict = PyDict::new_bound(py);
+                let dict = PyDict::new(py);
                 for (key, value) in sorted_data {
                     dict.set_item(key, value)?;
                 }
-                Ok(dict.to_object(py))
+                Ok(dict.into())
             })
         }
         Err(e) => Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string())),
@@ -225,6 +226,8 @@ pub struct PyMessage {
     role: String,
     #[pyo3(get)]
     content: Option<String>,
+    #[pyo3(get)]
+    reasoning_content: Option<String>,
 }
 
 #[pyclass(name = "Chat", unsendable)]
@@ -236,13 +239,14 @@ pub struct PyChat {
 #[pymethods]
 impl PyChat {
     #[new]
-    #[pyo3(signature = (model_name, system_prompt = None, schema = None, native_tools = false, extra_tools = None, debug_out = false))]
+    #[pyo3(signature = (model_name, system_prompt = None, schema = None, native_tools = false, extra_tools = None, thinking_mode = None, debug_out = false))]
     fn new(
             model_name: &str,
             system_prompt: Option<String>,
             schema: Option<PySimpleSchema>,
             native_tools: bool,
             extra_tools: Option<Vec<PyTool>>,
+            thinking_mode: Option<bool>,
             debug_out: bool,
         ) -> PyResult<Self> {
         if schema.is_some() && (native_tools || extra_tools.is_some()) {
@@ -297,7 +301,7 @@ impl PyChat {
             }
         }
         let final_tools = if tool_library.is_empty() { None } else { Some(tool_library) };
-        let chat = Chat::new(model_name, system_prompt, final_tools, rust_schema, Some(debug_out))?;
+        let chat = Chat::new(model_name, system_prompt, final_tools, rust_schema, thinking_mode, Some(debug_out))?;
         let rt = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
         Ok(PyChat { chat, rt })
     }
@@ -307,56 +311,79 @@ impl PyChat {
         Ok(PyMessage {
             role: assistant_message.role.clone(),
             content: assistant_message.content.clone(),
+            reasoning_content: assistant_message.reasoning_content.clone(),
         })
     }
 }
 
 // --- Python <-> Rust Data Conversion Helpers ---
 
-pub fn json_to_pyobject(py: Python, value: &JsonValue) -> PyResult<PyObject> {
-    match value {
+pub fn json_to_pyobject(py: Python, json_val: &JsonValue) -> PyResult<PyObject> {
+    match json_val {
         JsonValue::Null => Ok(py.None()),
-        JsonValue::Bool(b) => Ok(b.to_object(py)),
+        JsonValue::Bool(b) => Ok(b.into_pyobject(py)?.into_bound().into()),
         JsonValue::Number(n) => {
-            if let Some(i) = n.as_i64() { Ok(i.to_object(py)) }
-            else if let Some(f) = n.as_f64() { Ok(f.to_object(py)) }
-            else { Err(PyErr::new::<pyo3::exceptions::PyValueError, _>("Invalid number format")) }
+            if let Some(i) = n.as_i64() {
+                Ok(i.into_pyobject(py)?.into_bound().into())
+            } else if let Some(f) = n.as_f64() {
+                Ok(f.into_pyobject(py)?.into_bound().into())
+            } else {
+                Err(PyErr::new::<pyo3::exceptions::PyValueError, _>("Invalid number format"))
+            }
         }
-        JsonValue::String(s) => Ok(s.to_object(py)),
+        JsonValue::String(s) => Ok(s.into_pyobject(py)?.into_bound().into()),
         JsonValue::Array(a) => {
-            let mut py_list = Vec::with_capacity(a.len());
-            for item in a { py_list.push(json_to_pyobject(py, item)?); }
-            Ok(py_list.to_object(py))
+            let elements: Vec<PyObject> =
+                a.iter().map(|item| json_to_pyobject(py, item)).collect::<PyResult<_>>()?;
+            Ok(PyList::new(py, &elements)?.into())
         }
         JsonValue::Object(o) => {
-            let dict = PyDict::new_bound(py);
-            for (k, v) in o { dict.set_item(k, json_to_pyobject(py, v)?)?; }
-            Ok(dict.to_object(py))
+            let dict = PyDict::new(py);
+            for (k, v) in o {
+                dict.set_item(k, json_to_pyobject(py, v)?)?;
+            }
+            Ok(dict.into())
         }
     }
 }
 
 pub fn pyobject_to_json(py: Python, obj: &PyObject) -> PyResult<JsonValue> {
     let bound_obj = obj.bind(py);
-    if bound_obj.is_none() { return Ok(JsonValue::Null); }
-    if let Ok(b) = bound_obj.extract::<bool>() { return Ok(JsonValue::Bool(b)); }
-    if let Ok(i) = bound_obj.extract::<i64>() { return Ok(JsonValue::Number(i.into())); }
-    if let Ok(f) = bound_obj.extract::<f64>() { return Ok(JsonValue::Number(serde_json::Number::from_f64(f).unwrap())); }
-    if let Ok(s) = bound_obj.extract::<String>() { return Ok(JsonValue::String(s)); }
-    if let Ok(list) = bound_obj.downcast::<PyList>() {
+    if bound_obj.is_none() {
+        return Ok(JsonValue::Null);
+    }
+    if let Ok(b) = bound_obj.extract::<bool>() {
+        return Ok(JsonValue::Bool(b));
+    }
+    if let Ok(i) = bound_obj.extract::<i64>() {
+        return Ok(JsonValue::Number(i.into()));
+    }
+    if let Ok(f) = bound_obj.extract::<f64>() {
+        return Ok(JsonValue::Number(serde_json::Number::from_f64(f).unwrap()));
+    }
+    if let Ok(s) = bound_obj.extract::<String>() {
+        return Ok(JsonValue::String(s));
+    }
+
+    if let Ok(list) = bound_obj.clone().downcast_into::<PyList>() {
         let mut rust_vec = Vec::new();
-        for item in list { rust_vec.push(pyobject_to_json(py, &item.to_object(py))?); }
+        for item in list.iter() {
+            rust_vec.push(pyobject_to_json(py, &(item.into_pyobject(py)?.into_bound().into()))?);
+        }
         return Ok(JsonValue::Array(rust_vec));
     }
-    if let Ok(dict) = bound_obj.downcast::<PyDict>() {
+
+    if let Ok(dict) = bound_obj.clone().downcast_into::<PyDict>() {
         let mut rust_map = serde_json::Map::new();
-        for item_res in dict.iter() {
-             let (k, v) = item_res;
-             let key = k.extract::<String>()?;
-             let value = pyobject_to_json(py, &v.to_object(py))?;
-             rust_map.insert(key, value);
+        for (k, v) in dict.iter() {
+            let key = k.extract::<String>()?;
+            let value = pyobject_to_json(py, &(v.into_pyobject(py)?.into_bound().into()))?;
+            rust_map.insert(key, value);
         }
         return Ok(JsonValue::Object(rust_map));
     }
-    Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>("Unsupported Python type for JSON conversion"))
+
+    Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(
+        "Unsupported Python type for JSON conversion",
+    ))
 } 

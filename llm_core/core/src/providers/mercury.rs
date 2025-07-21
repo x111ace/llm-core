@@ -7,6 +7,7 @@ use super::{ProviderAdapter, ResponseParser};
 use serde_json::{json, Value as JsonValue};
 use std::collections::HashSet;
 use reqwest::header;
+use regex::Regex;
 
 /// Adapter for the Inception Labs Mercury API.
 pub struct MercuryAdapter;
@@ -26,6 +27,8 @@ impl ProviderAdapter for MercuryAdapter {
         temperature: f32,
         _schema: Option<SimpleSchema>,
         tools: Option<&Vec<ToolDefinition>>,
+        _thinking_mode: bool,
+        debug: bool,
     ) -> JsonValue {
         // Mercury expects the 'arguments' in a tool_call message to be a string,
         // not a JSON object. We need to manually convert it for the synthesis turn.
@@ -64,8 +67,8 @@ impl ProviderAdapter for MercuryAdapter {
         }
 
         // Add a debug print to inspect the final payload before sending.
-        if messages.iter().any(|m| m.role == "tool") {
-            println!("[Mercury Adapter] Prepared Payload for Synthesis:\n{}\n", serde_json::to_string_pretty(&payload).unwrap());
+        if debug {
+            println!("[MERCURY ADAPTER DEBUG] Prepared Payload for Synthesis:\n{}\n", serde_json::to_string_pretty(&payload).unwrap());
         }
 
         payload
@@ -114,6 +117,18 @@ impl ResponseParser for MercuryParser {
                 e, raw_response_text
             ))
         })?;
+
+        if let Some(choice) = payload.choices.get_mut(0) {
+            if let Some(content) = &mut choice.message.content {
+                let think_re = Regex::new(r"(?is)<think>(.*)</think>").unwrap();
+                if let Some(captures) = think_re.captures(content) {
+                    if let Some(thought) = captures.get(1) {
+                        choice.message.reasoning_content = Some(thought.as_str().trim().to_string());
+                    }
+                    *content = think_re.replace(content, "").trim().to_string();
+                }
+            }
+        }
 
         if let Some(usage) = &mut payload.usage {
             usage.calculate_cost(input_price, output_price);

@@ -1,9 +1,55 @@
 ---
 alwaysApply: true
 ---
+### Guiding Principles for Developing `llm-core`
+
+You are an expert AI programming assistant paired with a human developer to build and enhance the `llm-core` Rust library. Your primary goal is to write clean, robust, and maintainable code that strictly adheres to the project's established architectural patterns.
+
+IMPORTANT: Ensure all PyO3 implementations follow the instructions in 'https://pyo3.rs/v0.23.0/migration' closely.
+
+**Core Architectural Pillars:**
+
+1.  **The `Orchestra` is Central (`orchestra.rs`):**
+    *   The `Orchestra` is the **stateless** engine for all AI interactions.
+    *   **ALL** AI model calls **must** be routed through an `Orchestra` instance. This ensures that all calls benefit from the built-in provider abstraction, configuration management, retry logic, and strategy selection (e.g., native tools vs. "Lucky" fallback).
+    *   Avoid implementing one-off HTTP clients or bypassing the `Orchestra`.
+
+2.  **Provider Abstraction is Key (`providers/`):**
+    *   All provider-specific logic is isolated within its own module (e.g., `providers/gemini.rs`).
+    *   New provider features (like image generation) or support for new providers **must** be implemented by extending the `ProviderAdapter` and `ResponseParser` traits in `providers/mod.rs`.
+    *   Do not bleed provider-specific logic into the `Orchestra` or tools.
+
+3.  **Tools are Self-Contained Wrappers (`config/toolkit.rs`):**
+    *   Tools are defined as simple, synchronous Rust functions.
+    *   If a tool needs to perform an `async` operation (like calling the `Sorter` or `Orchestra`), it **must** create its own temporary `tokio` runtime to bridge the synchronous and asynchronous contexts.
+    *   Tools should be self-contained and rely on the public APIs of other components (`Sorter::run_sorting_task`, `Orchestra::new`, etc.), not their internal implementation details.
+    *   The schema for a tool's parameters must be clearly and comprehensively defined in its `FunctionDefinition`.
+
+4.  **Configuration is Centralized (`config.rs`, `models.json`):**
+    *   `models.json` is the **single source of truth** for all supported AI models. Any new model must be added there first.
+    *   API keys and other secrets are managed via `.env` files and accessed through `config::get_env_var`.
+
+5.  **Testing is End-to-End (`tests/full_test.rs`):**
+    *   New features must be accompanied by a robust integration test.
+    *   Tests for tool-based features should use the `Chat` struct to simulate a realistic, multi-step conversation.
+    *   Assertions against LLM responses should be flexible (e.g., `contains("keyword")`) to avoid failures due to minor variations in wording.
+    *   For tests involving file I/O, **always** write to an unambiguous, reliable location like the system's temporary directory (`std::env::temp_dir()`) to prevent environment-specific permission errors.
+
+**Your Workflow for New Features:**
+
+1.  **Analyze the Request:** Understand how the new feature fits into the existing architecture.
+2.  **Extend the Interface:** If necessary, add new methods to the `ProviderAdapter` or `Orchestra`.
+3.  **Implement the Core Logic:** Write the new functionality, ensuring it follows the principles above.
+4.  **Expose as a Tool (if applicable):** Create a simple, synchronous wrapper in `toolkit.rs`.
+5.  **Write a Comprehensive Test:** Add a new test case to `full_test.rs` that validates the entire end-to-end flow.
+
+By following these principles, you will ensure the continued quality and stability of the `llm-core` codebase.
+
+***
+
 ### `llm-core` Development & Contribution Guidelines
 
-These rules are designed to maintain the architectural integrity and code quality of the project. All future contributions should adhere to these standards.
+These rules are designed to maintain the architectural integrity and code quality of the project. 
 
 1.  **Provider & Model Integration**
     *   **Encapsulation is Key**: All logic for a new API provider (e.g., a new LLM company) must be contained within its own module in `llm_core/core/src/providers/`.
@@ -35,3 +81,7 @@ These rules are designed to maintain the architectural integrity and code qualit
 6.  **Usage & Cost Tracking**
     *   **Log Every Turn**: Any function that results in a billable API call (like `Chat::send` or `Sorter::run_sorting_task`) must call `log_usage_turn`.
     *   **Provide a Clear Label**: When logging usage, provide a descriptive `label` (e.g., "convo with tools", "sort 50 items") to make the usage logs easy to analyze.
+
+All future contributions should adhere to these standards.
+
+***

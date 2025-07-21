@@ -121,7 +121,8 @@
                 "model_tag": "grok-3-mini",
                 "input_price": 0.3,
                 "output_price": 0.5,
-                "token_window": 131072
+                "token_window": 131072,
+                "reasoning": "always"
             }
         }
     },
@@ -151,7 +152,8 @@
                 "model_tag": "deepseek/deepseek-r1-0528:free",
                 "input_price": 0.0,
                 "output_price": 0.0,
-                "token_window": 163840
+                "token_window": 163840,
+                "reasoning": "always"
             }
         }
     },
@@ -163,7 +165,8 @@
                 "model_tag": "qwen3:0.6b",
                 "input_price": 0.0,
                 "output_price": 0.0,
-                "token_window": 40960
+                "token_window": 40960,
+                "reasoning": "toggle"
             },
             "GRANITE 3.3:2B": {
                 "model_tag": "granite3.3:2b",
@@ -175,7 +178,8 @@
                 "model_tag": "deepseek-r1:1.5b",
                 "input_price": 0.0,
                 "output_price": 0.0,
-                "token_window": 131072
+                "token_window": 131072,
+                "reasoning": "toggle"
             }
         }
     }

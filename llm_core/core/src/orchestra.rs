@@ -1,7 +1,7 @@
 use pyo3::{prelude::*, types::PyDict};
 
 use crate::bindings;
-use crate::config;
+use crate::config::{self, ReasoningCapability};
 use crate::client::{self, Jitter, RetryPolicy};
 use crate::datam::{
     format_system_message, format_tool_message, format_user_message, Message, ResponsePayload,
@@ -24,6 +24,80 @@ use crate::providers::{
 use serde_json::Value as JsonValue;
 use serde_json::{json};
 use std::sync::Arc;
+use uuid::Uuid;
+
+const PROMPT_INDUCED_REASONING_PROMPT: &str = r#"# **COGNITION INSTRUCTIONS**
+
+You are an advanced reasoning system. 
+
+When responding, first analyze the request thoroughly by:
+1. Decomposing the problem into core components
+2. Modeling relationships between elements
+3. Simulating potential solution paths
+4. Selecting optimal response strategy
+
+Enclose all cognitive processing in <think> tags using:
+- Mathematical notation for state representation
+- Formal logic for reasoning steps
+- Quantitative evaluation metrics
+
+After completing analysis, provide final response outside tags that:
+- Maintains high signal-to-noise ratio
+- Directly answers the request
+- Is concise and complete
+
+## **OUTPUT STRUCTURE**
+
+<think>
+Internal processing using mathematical notation:
+- Current analysis: ⟨context|understanding⟩ = 0.8
+- Thought process: |φ⟩ = 0.7|direct⟩ + 0.3|nuanced⟩
+- Quality control: ⟨response|needs⟩ = 0.95
+</think>
+Natural language response.
+
+## **COGNITIVE PROCESS**
+
+<think>
+Analysis framework:
+- State: |ψ⟩ = ∑(understandingᵢ ⊗ contextⱼ)
+- Dynamics: ∂(solution)/∂t = -k·problem
+- Optimization: argmin(⟨error|solution⟩)
+
+Thought process:
+1. Decomposition: lim_{n→∞} ∇ⁿ(input) → core_components
+2. Modeling: ℍ(situation) = ∏(factorsₖ)
+3. Simulation: ∫(possible_paths)
+4. Selection: max(⟨option|requirements⟩)
+5. Verification: ∇(output) · ∇(needs) > 0.9
+
+Quality constraints:
+- ℒ(consistency) = 0
+- ∂(precision)/∂t > 0
+- lim_{t→∞} utility(t)/effort(t) → optimal
+</think>
+
+
+## **FORMAT RULES**
+
+1. Cognitive processing:
+   - Enclosed in <think></think>
+   - Uses symbolic notation
+   - Terminates before response
+
+2. Final output:
+   - Plain text only
+   - Complete and direct
+   - No markup references
+
+3. Technical content:
+   - Code blocks only when necessary
+   - Marked with ```
+
+4. Quality enforcement:
+   - |response⟩ = √(clarity² + relevance²)
+   - min(noise) ∧ max(signal)
+"#;
 
 // NEW: Internal enums to represent the chosen strategy for a given Orchestra instance.
 // This simplifies the logic inside call_ai by having the strategy pre-determined.
@@ -78,6 +152,9 @@ pub struct Orchestra {
     // NEW: Internal strategy fields, determined at initialization.
     tool_strategy: InternalToolStrategy,
     structured_strategy: InternalStructuredStrategy,
+    // NEW: Reasoning capability fields
+    reasoning_capability: ReasoningCapability,
+    thinking_mode: bool,
 }
 
 impl Orchestra {
@@ -91,6 +168,7 @@ impl Orchestra {
             temperature: Option<f32>,
             tools: Option<ToolLibrary>,
             schema: Option<SimpleSchema>,
+            thinking_mode: Option<bool>,
             debug: Option<bool>,
         ) -> Result<Self, LLMCoreError> {
         // --- Configuration Validation ---
@@ -107,6 +185,14 @@ impl Orchestra {
             .ok_or_else(|| {
                 LLMCoreError::ConfigError(format!("Model '{}' not found in `models.json`", model_name))
             })?;
+
+        let reasoning_capability = model_details.reasoning_capability.clone();
+
+        // Determine the final thinking_mode state. It can be overridden by the user,
+        // otherwise it defaults to true only if the model's reasoning is always on.
+        let final_thinking_mode = thinking_mode.unwrap_or_else(|| {
+            reasoning_capability == ReasoningCapability::Always
+        });
 
         let provider_adapter: Arc<dyn ProviderAdapter> = match provider_name {
             "OpenAI" => Arc::new(OpenAIAdapter),
@@ -197,6 +283,8 @@ impl Orchestra {
             tool_strategy,
             structured_strategy,
             debug: debug_mode,
+            reasoning_capability,
+            thinking_mode: final_thinking_mode,
         })
     }
 
@@ -256,6 +344,10 @@ impl Orchestra {
         &self.model_tag
     }
 
+    pub fn thinking_mode(&self) -> bool {
+        self.thinking_mode
+    }
+
     /// Executes the first API call in a potential multi-step conversation.
     /// It prepares the prompt according to the determined strategy (Native vs. Lucky)
     /// and parses the initial response.
@@ -266,6 +358,51 @@ impl Orchestra {
         let mut final_messages = messages.clone();
         let mut schema_for_provider: Option<SimpleSchema> = None;
         let mut tools_for_provider: Option<Vec<ToolDefinition>> = None;
+
+        // --- Reasoning Prompt Injection ---
+        const COT_MARKER: &str = "Chain-of-Thought Instructions";
+
+        let (system_message_exists, has_cot_prompt) =
+            if let Some(first_message) = final_messages.get(0) {
+                if first_message.role == "system" {
+                    (true, first_message.content.as_ref().map_or(false, |c| c.contains(COT_MARKER)))
+                } else {
+                    (false, false)
+                }
+            } else {
+                (false, false)
+            };
+
+        if self.thinking_mode && self.reasoning_capability == ReasoningCapability::PromptInducible {
+            if !has_cot_prompt {
+                if system_message_exists {
+                    let content = final_messages[0].content.as_deref().unwrap_or("").trim();
+                    let new_content = if content.is_empty() {
+                        PROMPT_INDUCED_REASONING_PROMPT.to_string()
+                    } else {
+                        format!("{}\n\n{}", content, PROMPT_INDUCED_REASONING_PROMPT)
+                    };
+                    final_messages[0].content = Some(new_content);
+                } else {
+                    final_messages.insert(0, format_system_message(PROMPT_INDUCED_REASONING_PROMPT.to_string()));
+                }
+            }
+        } else {
+            if has_cot_prompt {
+                let content = final_messages[0].content.as_ref().unwrap();
+                let new_content = content
+                    .replace(&format!("\n\n{}", PROMPT_INDUCED_REASONING_PROMPT), "")
+                    .replace(PROMPT_INDUCED_REASONING_PROMPT, "")
+                    .trim()
+                    .to_string();
+                
+                if new_content.is_empty() {
+                    final_messages.remove(0);
+                } else {
+                    final_messages[0].content = Some(new_content);
+                }
+            }
+        }
 
         // --- Prepare prompts and payload based on determined strategy ---
 
@@ -301,6 +438,8 @@ impl Orchestra {
             self.temperature,
             schema_for_provider,
             tools_for_provider.as_ref(),
+            self.thinking_mode,
+            self.debug,
         );
 
         let response_text = client::execute_single_call(url, headers, payload, &self.retry_policy).await?;
@@ -487,7 +626,7 @@ impl Orchestra {
         let synthesis_messages_for_debug = messages.clone(); // Clone for debugging.
         let url = self.provider_adapter.get_request_url(&self.base_url, &self.model_tag, &self.api_key);
         let headers = self.provider_adapter.get_request_headers(&self.api_key);
-        let payload = self.provider_adapter.prepare_request_payload(&self.model_tag, messages, self.temperature, None, None);
+        let payload = self.provider_adapter.prepare_request_payload(&self.model_tag, messages, self.temperature, None, None, self.thinking_mode, self.debug);
         let final_text = client::execute_single_call(url, headers, payload, &self.retry_policy).await?;
         
         let final_payload = self.response_parser.parse_response(
@@ -536,7 +675,7 @@ impl Orchestra {
                                 }
                             };
     
-                        match function.call_bound(py, (), Some(py_kwargs)) {
+                        match function.call(py, (), Some(py_kwargs)) {
                             Ok(result) => {
                                match bindings::python_b::pyobject_to_json(py, &result) {
                                     Ok(json_val) => serde_json::to_string(&json_val).unwrap_or_else(|e| format!("Failed to serialize tool result: {}", e)),
@@ -568,8 +707,27 @@ impl Orchestra {
     /// This function orchestrates the entire process, including prompt preparation,
     /// making the API call, and handling multi-step tool execution.
     pub async fn call_ai(&self, messages: Vec<Message>) -> Result<ResponsePayload, LLMCoreError> {
+        let job_id = Uuid::new_v4();
+        if self.debug {
+            println!("\n[ORCHESTRA DEBUG]");
+            println!("Job ID: {}", job_id);
+            println!("Model: {}", self.user_facing_model_name);
+            println!("Tool Strategy: {:?}", std::mem::discriminant(&self.tool_strategy));
+            println!("Structured Strategy: {:?}", std::mem::discriminant(&self.structured_strategy));
+            println!("Thinking Mode: {}", self.thinking_mode);
+            println!("Reasoning Capability: {:?}", self.reasoning_capability);
+        }
         let (initial_payload, updated_messages) = self.execute_initial_turn(messages).await?;
-        self.handle_tool_cycle(initial_payload, updated_messages).await
+        let final_payload = self.handle_tool_cycle(initial_payload, updated_messages).await?;
+
+        if let Some(usage) = &final_payload.usage {
+            let label = "chat_turn";
+            if let Err(e) = crate::usage::log_usage_turn(job_id, usage, label, &self.user_facing_model_name) {
+                eprintln!("[WARNING] Failed to log usage for chat turn: {}", e);
+            }
+        }
+
+        Ok(final_payload)
     }
 
     /// Executes a swarm of concurrent API calls.
@@ -599,7 +757,7 @@ impl Orchestra {
             ];
 
             let payload = self.provider_adapter.prepare_request_payload(
-                &self.model_tag, messages, self.temperature, schema_for_provider, None,
+                &self.model_tag, messages, self.temperature, schema_for_provider, None, self.thinking_mode, self.debug
             );
             all_payloads.push(payload);
         }

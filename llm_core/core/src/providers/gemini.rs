@@ -6,6 +6,7 @@ use crate::error::LLMCoreError;
 use super::{ProviderAdapter, ResponseParser};
 use serde_json::{json, Value as JsonValue};
 use serde::{Deserialize, Serialize};
+use regex::Regex;
 
 // --- Structs for Gemini API ---
 
@@ -47,6 +48,8 @@ impl ProviderAdapter for GoogleAdapter {
             temperature: f32,
             schema: Option<SimpleSchema>,
             tools: Option<&Vec<ToolDefinition>>,
+            _thinking_mode: bool,
+            debug: bool,
         ) -> JsonValue {
         let mut system_prompt = String::new();
         let mut regular_messages = Vec::new();
@@ -108,23 +111,17 @@ impl ProviderAdapter for GoogleAdapter {
                 contents.push(GeminiContent { role: role.to_string(), parts });
             }
         }
-        
-        // Prepend the system prompt to the first user message, if one exists.
-        if !system_prompt.is_empty() {
-             if let Some(first_content) = contents.iter_mut().find(|c| c.role == "user") {
-                 if let Some(first_part) = first_content.parts.get_mut(0) {
-                     if let Some(text) = &mut first_part.text {
-                         *text = format!("{}\n{}", system_prompt.trim(), text);
-                     }
-                 }
-             }
-        }
-
 
         let mut base_payload = json!({
             "contents": contents,
         });
         
+        if !system_prompt.is_empty() {
+            base_payload["systemInstruction"] = json!({
+                "parts": [{ "text": system_prompt.trim() }]
+            });
+        }
+
         let mut generation_config = json!({ "temperature": temperature });
 
         if let Some(tools) = tools {
@@ -141,7 +138,9 @@ impl ProviderAdapter for GoogleAdapter {
             base_payload["generationConfig"] = generation_config;
         }
 
-        println!("\n[Gemini Adapter] Prepared Payload for Synthesis:\n{}\n", serde_json::to_string_pretty(&base_payload).unwrap());
+        if debug {
+            println!("\n[GEMINI ADAPTER DEBUG] Prepared Payload for Synthesis:\n{}\n", serde_json::to_string_pretty(&base_payload).unwrap());
+        }
 
         base_payload
     }
@@ -289,6 +288,17 @@ impl ResponseParser for GoogleParser {
             }
         }
 
+        let mut reasoning_content: Option<String> = None;
+        if let Some(c) = &mut content {
+            let think_re = Regex::new(r"(?is)<think>(.*)</think>").unwrap();
+            if let Some(captures) = think_re.captures(c) {
+                if let Some(thought) = captures.get(1) {
+                    reasoning_content = Some(thought.as_str().trim().to_string());
+                }
+                *c = think_re.replace(c, "").trim().to_string();
+            }
+        }
+
         Ok(ResponsePayload {
             id: format!("gemini-{}", uuid::Uuid::new_v4()),
             object: "chat.completion".to_string(),
@@ -303,6 +313,7 @@ impl ResponseParser for GoogleParser {
                     content,
                     name: tool_name_for_message,
                     tool_calls: if tool_calls.is_empty() { None } else { Some(tool_calls) },
+                    reasoning_content,
                     ..Default::default()
                 },
             }],

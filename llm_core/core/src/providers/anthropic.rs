@@ -6,6 +6,7 @@ use crate::tools::{ToolCall, ToolDefinition};
 use reqwest::header;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value as JsonValue};
+use regex::Regex;
 
 pub struct AnthropicAdapter;
 pub struct AnthropicParser;
@@ -81,6 +82,8 @@ impl ProviderAdapter for AnthropicAdapter {
         temperature: f32,
         schema: Option<SimpleSchema>,
         tools: Option<&Vec<ToolDefinition>>,
+        _thinking_mode: bool,
+        _debug: bool,
     ) -> JsonValue {
         // Anthropic uses a top-level `system` prompt.
         let system_prompt = messages
@@ -247,6 +250,15 @@ impl ResponseParser for AnthropicParser {
             }
         }
 
+        let mut reasoning_content: Option<String> = None;
+        let think_re = Regex::new(r"(?is)<think>(.*)</think>").unwrap();
+        if let Some(captures) = think_re.captures(&final_content) {
+            if let Some(thought) = captures.get(1) {
+                reasoning_content = Some(thought.as_str().trim().to_string());
+            }
+            final_content = think_re.replace(&final_content, "").trim().to_string();
+        }
+
         // The Anthropic API sometimes returns an empty content string for tool_use stops.
         // We'll treat an empty string as `None` for consistency with other providers.
         let final_content_option = if final_content.is_empty() {
@@ -259,6 +271,7 @@ impl ResponseParser for AnthropicParser {
             role: "assistant".to_string(),
             content: final_content_option,
             tool_calls: if tool_calls.is_empty() { None } else { Some(tool_calls) },
+            reasoning_content,
             ..Default::default()
         };
 

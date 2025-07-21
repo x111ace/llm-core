@@ -224,6 +224,7 @@ impl Sorter {
             Some(0.0), // Use a low temperature for deterministic category generation
             None,
             Some(category_gen_schema),
+            None, // thinking_mode
             Some(self.debug),
         )?;
         
@@ -335,6 +336,7 @@ impl Sorter {
             Some(0.0), // Low temperature for sorting
             None,
             Some(sorter_schema),
+            None, // thinking_mode
             Some(self.debug),
         )?);
 

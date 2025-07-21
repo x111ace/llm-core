@@ -1,21 +1,30 @@
 use serde::{Deserialize, Serialize};
 use std::ops::{Add, AddAssign}; // Added for Usage aggregation
-pub use crate::tools::ToolCall;
+use pyo3::prelude::*;
+
+use crate::tools::ToolCall;
 
 /// Represents a single message in a conversation.
 /// This struct is compatible with OpenAI's format and serves as our standard.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[pyclass]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Message {
+    #[pyo3(get, set)]
     pub role: String,
+    #[pyo3(get, set)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content: Option<String>,
+    #[pyo3(get, set)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    #[pyo3(get, set)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
+    #[pyo3(get, set)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<Vec<ToolCall>>,
     // This field is for non-standard output, like reasoning from specific models.
+    #[pyo3(get, set)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_content: Option<String>,
 }

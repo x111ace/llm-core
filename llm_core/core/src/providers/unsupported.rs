@@ -22,6 +22,8 @@ impl ProviderAdapter for UnsupportedAdapter {
         temperature: f32,
         _schema: Option<SimpleSchema>,
         tools: Option<&Vec<ToolDefinition>>,
+        _thinking_mode: bool,
+        _debug: bool,
     ) -> JsonValue {
         if tools.is_some() {
             eprintln!("[WARNING] Tool calling is not supported for provider: {}. Ignoring tool definitions.", self.provider_name);
