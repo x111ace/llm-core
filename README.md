@@ -7,6 +7,7 @@ This core doesn't simply make API calls, it allows a plethora of necessary funct
 
 - Native tool library
 - Structured Response
+- Data Sorter Feature
 - Major LLM Providers
 - Async swarm calling
 - Token Usage Tracker
@@ -21,11 +22,6 @@ cd llm-core
 python llm_core/__rsdl__.py -i
 ```
 
-Once you see the output:
-```plaintext
-🎉 Installation Complete!
-```
-
 Then you can run:
 ```bash
 conda activate llm_core_venv
@@ -36,6 +32,7 @@ When building features in the core,
 ```bash
 conda deactivate
 python llm_core/__rsdl__.py -r
+<<<<<<< HEAD
 ```
 
 ---
@@ -48,4 +45,6 @@ conda activate llm_core_venv
 python test.py
 conda deactivate
 python llm_core/__rsdl__.py -r
+=======
+>>>>>>> 12a7a9d (Updated README.md)
 ```
