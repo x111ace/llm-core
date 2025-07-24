@@ -20,6 +20,10 @@ fn tool_supporting_models() -> HashSet<&'static str> {
 }
 
 impl ProviderAdapter for MercuryAdapter {
+    fn get_provider_name(&self) -> &str {
+        "Inception Labs"
+    }
+
     fn prepare_request_payload(
         &self,
         model_tag: &str,

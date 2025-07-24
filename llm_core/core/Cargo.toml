@@ -55,3 +55,10 @@ base64 = "0.22.1"
 
 # Unique identifiers for conversations
 uuid = { version = "1.9.1", features = ["v4", "serde"] }
+
+rusqlite = { version = "0.31.0", features = ["bundled"] }
+arroy = "0.6.1"
+heed = "0.22.0"
+
+[dev-dependencies]
+tempfile = "3.10.1"

@@ -75,6 +75,10 @@ struct AnthropicUsage {
 }
 
 impl ProviderAdapter for AnthropicAdapter {
+    fn get_provider_name(&self) -> &str {
+        "Anthropic"
+    }
+
     fn prepare_request_payload(
         &self,
         model_tag: &str,

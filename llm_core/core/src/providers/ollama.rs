@@ -54,6 +54,10 @@ struct OllamaRequestPayload {
 }
 
 impl ProviderAdapter for OllamaAdapter {
+    fn get_provider_name(&self) -> &str {
+        "Ollama"
+    }
+
     fn prepare_request_payload(
             &self,
             model_tag: &str,

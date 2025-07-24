@@ -1,0 +1,11 @@
+{
+	"folders": [
+		{
+			"path": ".."
+		},
+		{
+			"path": "../../kg/.qtest/mechamind/dox/agent_cli"
+		}
+	],
+	"settings": {}
+}

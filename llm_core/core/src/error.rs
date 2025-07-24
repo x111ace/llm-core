@@ -1,6 +1,7 @@
 use pyo3::{exceptions::PyValueError, PyErr};
 use tokio::task::JoinError;
 use std::fmt;
+use rusqlite;
 
 /// The primary error type for the `llm-core` library.
 ///
@@ -12,6 +13,9 @@ pub enum LLMCoreError {
     /// An error related to configuration, such as a missing `models.json`
     /// file, a malformed configuration, or a missing environment variable.
     ConfigError(String),
+
+    /// An error specific to the retrieval process (embedding, indexing, or searching).
+    RetrievalError(String),
 
     /// An error that occurs during an API request, typically related to
     /// network issues, timeouts, or DNS problems. Wraps a `reqwest::Error`.
@@ -25,6 +29,18 @@ pub enum LLMCoreError {
     /// indicating that the response was not valid JSON or did not match
     /// the expected structure.
     ResponseParseError(String),
+
+    /// An error originating from the Heed key-value store.
+    HeedError(heed::Error),
+
+    /// An error from the Arroy vector search library.
+    ArroyError(arroy::Error),
+
+    /// An error from the SQLite database.
+    RusqliteError(rusqlite::Error),
+
+    /// A general-purpose database error for other database-related issues.
+    DatabaseError(String),
 
     /// An I/O error related to file system operations, such as saving or
     /// loading conversation history.
@@ -47,11 +63,16 @@ impl fmt::Display for LLMCoreError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             LLMCoreError::ConfigError(msg) => write!(f, "Configuration error: {}", msg),
+            LLMCoreError::RetrievalError(msg) => write!(f, "Retrieval error: {}", msg),
             LLMCoreError::RequestError(err) => write!(f, "Request error: {}", err),
             LLMCoreError::ApiError { status, body } => {
                 write!(f, "API error (status {}): {}", status, body)
             }
             LLMCoreError::ResponseParseError(msg) => write!(f, "Response parse error: {}", msg),
+            LLMCoreError::HeedError(err) => write!(f, "Vector index error: {}", err),
+            LLMCoreError::ArroyError(err) => write!(f, "Vector search error: {}", err),
+            LLMCoreError::RusqliteError(err) => write!(f, "SQLite error: {}", err),
+            LLMCoreError::DatabaseError(msg) => write!(f, "Database error: {}", msg),
             LLMCoreError::IoError(err) => write!(f, "I/O error: {}", err),
             LLMCoreError::ToolExecutionError(msg) => write!(f, "Tool execution error: {}", msg),
             LLMCoreError::ChatError(msg) => write!(f, "Chat session error: {}", msg),
@@ -70,6 +91,24 @@ impl From<LLMCoreError> for PyErr {
 }
 
 // --- From Implementations for Ergonomics ---
+
+impl From<heed::Error> for LLMCoreError {
+    fn from(err: heed::Error) -> Self {
+        LLMCoreError::HeedError(err)
+    }
+}
+
+impl From<arroy::Error> for LLMCoreError {
+    fn from(err: arroy::Error) -> Self {
+        LLMCoreError::ArroyError(err)
+    }
+}
+
+impl From<rusqlite::Error> for LLMCoreError {
+    fn from(err: rusqlite::Error) -> Self {
+        LLMCoreError::RusqliteError(err)
+    }
+}
 
 impl From<reqwest::Error> for LLMCoreError {
     fn from(err: reqwest::Error) -> Self {

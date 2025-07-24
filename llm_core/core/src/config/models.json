@@ -19,7 +19,7 @@
                 "model_tag": "models/gemini-2.0-flash-preview-image-generation",
                 "input_price": 0.0,
                 "output_price": 0.0,
-                "token_window": 1048576
+                "token_window": 1047576
             }        
         }
     },
@@ -98,6 +98,18 @@
                 "input_price": 0.1,
                 "output_price": 0.4,
                 "token_window": 1047576
+            }
+        },
+        "embedders": {
+            "TEXT-EMB 3 SMALL": {
+                "model_tag": "text-embedding-3-small",
+                "input_price": 0.02,
+                "dimensions": 1536
+            },
+            "TEXT-EMB 3 LARGE": {
+                "model_tag": "text-embedding-3-large",
+                "input_price": 0.13,
+                "dimensions": 3072
             }
         }
     },

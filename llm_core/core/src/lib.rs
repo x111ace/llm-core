@@ -6,6 +6,7 @@ pub mod client;
 pub mod config;
 pub mod convo;
 pub mod datam;
+pub mod embed;
 pub mod error;
 pub mod lucky;
 pub mod modes;
@@ -14,6 +15,7 @@ pub mod providers;
 pub mod sorter;
 pub mod tools;
 pub mod usage;
+pub mod vector;
 
 /// This is the main entry point for the Python module.
 /// The `#[pymodule]` macro creates a function that initializes the module.

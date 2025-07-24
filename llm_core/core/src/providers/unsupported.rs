@@ -15,6 +15,10 @@ pub struct UnsupportedAdapter {
 }
 
 impl ProviderAdapter for UnsupportedAdapter {
+    fn get_provider_name(&self) -> &str {
+        &self.provider_name
+    }
+
     fn prepare_request_payload(
         &self,
         _model_tag: &str,

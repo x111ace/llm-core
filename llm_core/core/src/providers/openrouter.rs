@@ -15,6 +15,10 @@ pub struct OpenRouterAdapter;
 pub struct OpenRouterParser;
 
 impl ProviderAdapter for OpenRouterAdapter {
+    fn get_provider_name(&self) -> &str {
+        "OpenRouter"
+    }
+
     fn prepare_request_payload(
         &self,
         model_tag: &str,

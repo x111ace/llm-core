@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use std::env;
 
 pub mod toolkit;
+pub mod storage;
 pub use toolkit::get_rust_tool_library;
 
 // --- Data Structures for models.json ---
@@ -25,10 +26,14 @@ pub enum ReasoningCapability {
 pub struct ModelDetails {
     pub model_tag: String,
     pub input_price: f32,
+    #[serde(default)]
     pub output_price: f32,
+    #[serde(default)]
     pub token_window: u32,
     #[serde(rename = "reasoning", default)]
     pub reasoning_capability: ReasoningCapability,
+    #[serde(default)]
+    pub dimensions: usize,
 }
 
 /// Holds the configuration for a specific provider, including API keys and models.
@@ -37,6 +42,8 @@ pub struct ProviderConfig {
     pub api_key: String,
     pub base_url: String,
     pub models: HashMap<String, ModelDetails>,
+    #[serde(default)]
+    pub embedders: HashMap<String, ModelDetails>,
 }
 
 // --- Helper Function ---
@@ -78,10 +85,23 @@ impl ModelLibrary {
 
     // science: This lookup function efficiently finds model details by iterating through providers.
     // It now also returns the provider's friendly name (e.g., "OpenAI").
-    pub fn find_model(&self, friendly_name: &str) -> Option<(&str, &ProviderConfig, &ModelDetails)> {
+    pub fn find_model(&self, model_name: &str) -> Option<(&str, &ProviderConfig, &ModelDetails)> {
         for (provider_name, provider_data) in &self.providers {
-            if let Some(model_details) = provider_data.models.get(friendly_name) {
+            // First, search in the standard chat models.
+            if let Some(model_details) = provider_data.models.get(model_name) {
                 return Some((provider_name, provider_data, model_details));
+            }
+        }
+        None
+    }
+
+    pub fn find_embedder(
+            &self,
+            embedder_name: &str,
+        ) -> Option<(&str, &ProviderConfig, &ModelDetails)> {
+        for (provider_name, provider_data) in &self.providers {
+            if let Some(embedder_details) = provider_data.embedders.get(embedder_name) {
+                return Some((provider_name, provider_data, embedder_details));
             }
         }
         None

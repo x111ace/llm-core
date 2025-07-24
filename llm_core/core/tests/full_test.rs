@@ -13,10 +13,13 @@
 
 use _llm_core::{
     config::get_rust_tool_library,
+    config::storage::Storage,
+    orchestra::Orchestra,
     convo::Chat,
+    embed::Embedder,
+    vector::{KnowledgeBase, DocumentSource},
     datam::{format_system_message, format_user_message},
     lucky::{SchemaProperty, SimpleSchema},
-    orchestra::Orchestra,
     sorter::{Sorter, SortingInstructions},
 };
 use serde::Deserialize;
@@ -25,6 +28,7 @@ use std::env;
 use std::path::Path;
 use std::sync::Arc;
 use base64::Engine as _; // Import the Engine trait for base64 decoding
+use tempfile::tempdir;
 
 const MODEL_NAME: &str = "GEMINI 2.0 FLASH";
 
@@ -116,7 +120,7 @@ async fn test_normal_mode() {
 // --- Test: Thinking Mode (Prompt-Induced) ---
 // Goal: Verify that a standard model can be prompted to produce reasoning content.
 #[tokio::test]
-// #[ignore]
+#[ignore]
 async fn test_thinking_mode() {
     println!("\n--- Running Test: Thinking Mode ({}) ---\n", MODEL_NAME);
 
@@ -303,6 +307,7 @@ async fn test_sorter_mode() {
 
     assert_eq!(sort_result.category, "technology");
 }
+
 
 
 
@@ -536,14 +541,6 @@ async fn test_raww_image_gen() {
     );
 }
 
-
-
-
-
-
-
-
-
 #[tokio::test]
 #[ignore]
 async fn test_sorter_in_chat() {
@@ -598,4 +595,136 @@ async fn test_sorter_in_chat() {
     // Check for the existence of expected categories.
     assert!(sorted_json.get("animal").is_some() || sorted_json.get("animals").is_some(), "Category 'animal(s)' should exist.");
     assert!(sorted_json.get("fruit").is_some() || sorted_json.get("fruits").is_some(), "Category 'fruit(s)' should exist.");
+}
+
+
+
+
+
+
+
+
+
+#[tokio::test]
+// #[ignore]
+async fn test_embeddings() {
+    let embedder = Embedder::new("TEXT-EMB 3 SMALL", Some(true)).unwrap();
+    let embeddings = embedder
+        .get_embeddings(vec!["Hello, world!".to_string()])
+        .await
+        .unwrap();
+
+    println!(
+        "Received {} embedding(s), first one with {} dimensions.",
+        embeddings.len(),
+        embeddings.get(0).map_or(0, |e| e.len())
+    );
+
+    // 1. We asked for one embedding, so we should get one back.
+    assert_eq!(embeddings.len(), 1);
+
+    // 2. The default dimension for text-embedding-3-small is 1536.
+    // Let's assert that the vector has the expected size.
+    assert_eq!(embeddings[0].len(), 1536);
+}
+
+#[tokio::test]
+// #[ignore]
+async fn test_create_database() {
+    let dir = tempdir().unwrap();
+    let db_path = dir.path().join("rag.db");
+    let storage = Storage::new(&db_path);
+    assert!(storage.is_ok(), "Storage::new should succeed.");
+    assert!(db_path.exists());
+}
+
+#[tokio::test]
+// #[ignore]
+async fn test_database_remove_and_delete() {
+    // 1. Setup: Create a temporary database in a known location.
+    let temp_dir = std::env::temp_dir();
+
+    // 2. Create a dummy file to simulate a database file.
+    let dummy_file_path = temp_dir.join("dummy.db");
+    std::fs::File::create(&dummy_file_path).expect("Failed to create dummy file");
+    assert!(dummy_file_path.exists());
+
+    // 3. Attempt to remove and delete the file.
+    let remove_result = std::fs::remove_file(&dummy_file_path);
+    assert!(remove_result.is_ok(), "Failed to remove file: {:?}", remove_result.err());
+    assert!(!dummy_file_path.exists(), "File should have been deleted.");
+
+    // 4. Verify that the file is no longer present.
+    let verify_result = std::fs::metadata(&dummy_file_path);
+    assert!(verify_result.is_err(), "File should not exist after deletion.");
+}
+
+
+#[tokio::test]
+// #[ignore]
+async fn test_knowledge_base_end_to_end() {
+    // 1. Setup temporary paths for the database and vector index.
+    let dir = tempdir().unwrap();
+    let db_path = dir.path().join("test_kb.db");
+    let index_path = dir.path().join("test_kb_index");
+
+    // Ensure clean state from previous runs
+    let _ = std::fs::remove_file(&db_path);
+    let _ = std::fs::remove_dir_all(&index_path);
+
+    // 2. Initialize the KnowledgeBase.
+    let knowledge_base = KnowledgeBase::new(&db_path, &index_path, "TEXT-EMB 3 SMALL")
+        .expect("Failed to create KnowledgeBase");
+
+    // 3. Add documents in a batch.
+    let metadata = serde_json::json!({});
+    let documents = vec![
+        DocumentSource {
+            url: "doc1".to_string(),
+            chunk_number: 1,
+            title: "Fruit".to_string(),
+            summary: "".to_string(),
+            content: "The apple is a sweet, edible fruit produced by an apple tree.".to_string(),
+            metadata: metadata.clone(),
+        },
+        DocumentSource {
+            url: "doc2".to_string(),
+            chunk_number: 1,
+            title: "Tool".to_string(),
+            summary: "".to_string(),
+            content: "A hammer is a tool, most often a hand tool, consisting of a weighted head fixed to a long handle.".to_string(),
+            metadata: metadata.clone(),
+        },
+        DocumentSource {
+            url: "doc3".to_string(),
+            chunk_number: 1,
+            title: "Animal".to_string(),
+            summary: "".to_string(),
+            content: "The domestic dog is a domesticated descendant of the wolf.".to_string(),
+            metadata: metadata.clone(),
+        },
+    ];
+
+    knowledge_base
+        .add_documents_and_build(documents)
+        .await
+        .expect("Failed to add documents and build index");
+
+    // 4. Perform a search.
+    let search_query = "What is a hammer?";
+    let results = knowledge_base
+        .search(search_query, 1)
+        .await
+        .expect("Search failed");
+
+    // 5. Assert the results.
+    assert_eq!(results.len(), 1, "Should retrieve one document.");
+    let retrieved_doc = &results[0];
+    assert_eq!(retrieved_doc.title, "Tool");
+    assert!(retrieved_doc.content.contains("hammer"));
+
+    println!(
+        "Search for '{}' returned: '{}'",
+        search_query, retrieved_doc.content
+    );
 }

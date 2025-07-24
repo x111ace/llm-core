@@ -2,6 +2,7 @@ use crate::datam::{Message, ResponsePayload};
 use crate::tools::ToolDefinition;
 use crate::lucky::SimpleSchema;
 use crate::error::LLMCoreError;
+use crate::config::ProviderConfig;
 
 use super::{ProviderAdapter, ResponseParser};
 use serde::{Deserialize, Serialize};
@@ -16,6 +17,10 @@ pub struct OpenAIAdapter;
 pub struct OpenAIParser;
 
 impl ProviderAdapter for OpenAIAdapter {
+    fn get_provider_name(&self) -> &str {
+        "OpenAI"
+    }
+
     fn prepare_request_payload(
             &self,
             model_tag: &str,
@@ -92,8 +97,32 @@ impl ProviderAdapter for OpenAIAdapter {
         payload
     }
 
+    /// Prepares the payload for an embedding request.
+    fn prepare_embedding_request(&self, model_tag: &str, texts: Vec<String>) -> JsonValue {
+        json!({
+            "model": model_tag,
+            "input": texts,
+            "encoding_format": "float"
+        })
+    }
+
+    /// Prepares the payload for an image generation request.
+    fn prepare_image_request_payload(&self, _prompt: &str, _model_tag: &str) -> JsonValue {
+        json!({ "error": "Image generation not supported by OpenAI." })
+    }
+
     fn get_request_url(&self, base_url: &str, _model_tag: &str, _api_key: &str) -> String {
         format!("{}/chat/completions", base_url)
+    }
+
+    /// Gets the URL for embedding requests.
+    fn get_embedding_url(
+            &self,
+            base_url: &str,
+            _model_tag: &str,
+            _provider_config: &ProviderConfig,
+        ) -> String {
+        format!("{}/embeddings", base_url)
     }
 
     fn get_request_headers(&self, api_key: &str) -> header::HeaderMap {
@@ -114,6 +143,12 @@ impl ProviderAdapter for OpenAIAdapter {
     }
 
     fn supports_tools(&self, _model_tag: &str) -> bool {
+        true
+    }
+
+    /// Checks if the model supports embeddings.
+    fn supports_embeddings(&self, _model_tag: &str) -> bool {
+        // OpenAI supports embeddings for models like text-embedding-3-small and text-embedding-3-large.
         true
     }
 }
@@ -153,6 +188,26 @@ impl<'de> Deserialize<'de> for OpenAIFunctionCall {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OpenAIEmbeddingResponse {
+    pub object: String,
+    pub data: Vec<OpenAIEmbeddingData>,
+    pub model: String,
+    pub usage: OpenAIEmbeddingUsage,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OpenAIEmbeddingData {
+    pub object: String,
+    pub index: u32,
+    pub embedding: Vec<f32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OpenAIEmbeddingUsage {
+    pub prompt_tokens: u32,
+    pub total_tokens: u32,
+}
 
 impl ResponseParser for OpenAIParser {
     fn parse_response(
@@ -207,4 +262,18 @@ impl ResponseParser for OpenAIParser {
 
         Ok(payload)
     }
-} 
+
+    /// Parses the response from an embedding call into a list of vectors.
+    fn parse_embedding_response(
+        &self,
+        raw_response_text: &str,
+    ) -> Result<Vec<Vec<f32>>, LLMCoreError> {
+        let response: OpenAIEmbeddingResponse = serde_json::from_str(raw_response_text)?;
+        let embeddings = response
+            .data
+            .into_iter()
+            .map(|data| data.embedding)
+            .collect();
+        Ok(embeddings)
+    }
+}

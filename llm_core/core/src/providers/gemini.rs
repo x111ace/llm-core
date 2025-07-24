@@ -41,6 +41,10 @@ struct GeminiFunctionResponse {
 
 
 impl ProviderAdapter for GoogleAdapter {
+    fn get_provider_name(&self) -> &str {
+        "Google"
+    }
+
     fn prepare_request_payload(
             &self,
             _model_tag: &str,
@@ -145,18 +149,6 @@ impl ProviderAdapter for GoogleAdapter {
         base_payload
     }
 
-    fn prepare_image_request_payload(&self, prompt: &str, _model_tag: &str) -> JsonValue {
-        json!({
-            "contents": [{
-                "role": "user",
-                "parts": [{"text": prompt}]
-            }],
-            "generationConfig": {
-                "responseModalities": ["TEXT", "IMAGE"]
-            }
-        })
-    }
-
     fn get_request_url(&self, base_url: &str, model_tag: &str, api_key: &str) -> String {
         format!(
             "{}/{}:generateContent?key={}",
@@ -185,6 +177,10 @@ impl ProviderAdapter for GoogleAdapter {
     }
 
     fn supports_tools(&self, _model_tag: &str) -> bool {
+        true
+    }
+
+    fn supports_embeddings(&self, _model_tag: &str) -> bool {
         true
     }
 }
@@ -246,6 +242,21 @@ struct GeminiFunctionCall {
     args: JsonValue,
 }
 
+// --- New structs for Embedding Response Parsing ---
+#[derive(Deserialize)]
+struct GeminiEmbeddingResponse {
+    predictions: Vec<GeminiEmbeddingPrediction>,
+}
+
+#[derive(Deserialize)]
+struct GeminiEmbeddingPrediction {
+    embeddings: GeminiEmbeddings,
+}
+
+#[derive(Deserialize)]
+struct GeminiEmbeddings {
+    values: Vec<f32>,
+}
 
 impl ResponseParser for GoogleParser {
     fn parse_response(
@@ -328,6 +339,19 @@ impl ResponseParser for GoogleParser {
                 usage
             }),
         })
+    }
+
+    fn parse_embedding_response(
+        &self,
+        raw_response_text: &str,
+    ) -> Result<Vec<Vec<f32>>, LLMCoreError> {
+        let response: GeminiEmbeddingResponse = serde_json::from_str(raw_response_text)?;
+        let embeddings = response
+            .predictions
+            .into_iter()
+            .map(|p| p.embeddings.values)
+            .collect();
+        Ok(embeddings)
     }
 
     fn parse_image_response(

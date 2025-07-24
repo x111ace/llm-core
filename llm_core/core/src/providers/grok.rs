@@ -36,6 +36,10 @@ struct GrokRequestPayload {
 }
 
 impl ProviderAdapter for GrokAdapter {
+    fn get_provider_name(&self) -> &str {
+        "xAI"
+    }
+
     fn prepare_request_payload(
         &self,
         model_tag: &str,
