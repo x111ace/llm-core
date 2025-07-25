@@ -1,7 +1,12 @@
-use pyo3::{prelude::*, types::{PyDict, PyList}};
+use pyo3::{
+    exceptions::PyValueError,
+    prelude::*,
+    types::{PyDict, PyList},
+};
 use pyo3::{pyclass, pymethods, BoundObject, PyErr, PyObject, PyResult, Python};
-use serde_json::Value as JsonValue;
-use std::path::PathBuf;
+use serde_json::{Value as JsonValue};
+use std::path::{Path, PathBuf};
+use tokio::runtime::Runtime;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -13,6 +18,9 @@ use crate::sorter::{Sorter, SortingInstructions};
 use crate::tools::{FunctionDefinition, Tool, ToolDefinition, ToolLibrary};
 use crate::usage::log_usage_turn;
 use serde_json::json;
+use crate::ingest::Ingestor;
+use crate::vector::KnowledgeBase;
+use crate::error::LLMCoreError;
 
 // --- Python Bindings for Tools ---
 
@@ -313,6 +321,91 @@ impl PyChat {
             content: assistant_message.content.clone(),
             reasoning_content: assistant_message.reasoning_content.clone(),
         })
+    }
+}
+
+#[pyclass(name = "KnowledgeBase", unsendable)]
+pub struct PyKnowledgeBase {
+    db_path: PathBuf,
+    index_path: PathBuf,
+    embedding_model: String,
+    runtime: Runtime,
+}
+
+#[pymethods]
+impl PyKnowledgeBase {
+    #[new]
+    fn new(db_path: &str, index_path: &str, embedding_model: &str) -> PyResult<Self> {
+        let runtime = Runtime::new().map_err(|e| PyValueError::new_err(e.to_string()))?;
+        Ok(Self {
+            db_path: PathBuf::from(db_path),
+            index_path: PathBuf::from(index_path),
+            embedding_model: embedding_model.to_string(),
+            runtime,
+        })
+    }
+
+    fn search(&mut self, query: &str, limit: usize) -> PyResult<Py<PyAny>> {
+        let db_path = self.db_path.clone();
+        let index_path = self.index_path.clone();
+        let embedding_model = self.embedding_model.clone();
+
+        let search_results = self.runtime.block_on(async move {
+            let kb = KnowledgeBase::new(&db_path, &index_path, &embedding_model)?;
+            kb.search(query, limit).await
+        }).map_err(|e: LLMCoreError| PyValueError::new_err(e.to_string()))?;
+        
+        Python::with_gil(|py| {
+            let json_val = serde_json::to_value(search_results).unwrap();
+            json_to_pyobject(py, &json_val)
+        })
+    }
+}
+
+#[pyclass(name = "Ingestor", unsendable)]
+pub struct PyIngestor {
+    ingestor: Ingestor,
+    runtime: Runtime,
+}
+
+#[pymethods]
+impl PyIngestor {
+    #[new]
+    fn new(
+        db_path: &str,
+        index_path: &str,
+        embedding_model: &str,
+        enrichment_model: &str,
+    ) -> PyResult<Self> {
+        let runtime =
+            Runtime::new().map_err(|e| PyValueError::new_err(format!("Failed to create Tokio runtime: {}", e)))?;
+        let ingestor = Ingestor::new(
+            Path::new(db_path),
+            Path::new(index_path),
+            embedding_model,
+            enrichment_model,
+        )
+        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        
+        Ok(Self {
+            ingestor,
+            runtime,
+        })
+    }
+
+    fn ingest_from_url(&mut self, url: &str, source_tag: &str) -> PyResult<()> {
+        self.runtime
+            .block_on(self.ingestor.ingest_from_url(url, source_tag))
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+
+    fn ingest_from_file(&mut self, file_path: &str, source_tag: &str) -> PyResult<()> {
+        self.runtime
+            .block_on(
+                self.ingestor
+                    .ingest_from_file(Path::new(file_path), source_tag),
+            )
+            .map_err(|e| PyValueError::new_err(e.to_string()))
     }
 }
 

@@ -47,10 +47,10 @@ pub struct DocumentSource {
 
 impl KnowledgeBase {
     pub fn new(
-        db_path: &Path,
-        index_path: &Path,
-        embedding_model: &str,
-    ) -> Result<Self, LLMCoreError> {
+            db_path: &Path,
+            index_path: &Path,
+            embedding_model: &str,
+        ) -> Result<Self, LLMCoreError> {
         let embedder = Embedder::new(embedding_model, None)?;
         let storage = Storage::new(db_path)?;
         let vector_index = VectorIndex::new(index_path, embedder.dimensions)?;
@@ -58,9 +58,9 @@ impl KnowledgeBase {
     }
 
     pub async fn add_documents_and_build(
-        &self,
-        documents: Vec<DocumentSource>,
-    ) -> Result<(), LLMCoreError> {
+            &self,
+            documents: Vec<DocumentSource>,
+        ) -> Result<(), LLMCoreError> {
         let contents: Vec<String> = documents.iter().map(|d| d.content.clone()).collect();
         let embeddings = self.embedder.get_embeddings(contents).await?;
 
@@ -92,10 +92,10 @@ impl KnowledgeBase {
     }
 
     pub async fn search(
-        &self,
-        query: &str,
-        limit: usize,
-    ) -> Result<Vec<DocumentChunk>, LLMCoreError> {
+            &self,
+            query: &str,
+            limit: usize,
+        ) -> Result<Vec<DocumentChunk>, LLMCoreError> {
         let embeddings = self.embedder.get_embeddings(vec![query.to_string()]).await?;
         let query_vector = embeddings.get(0).ok_or_else(|| {
             LLMCoreError::RetrievalError("Failed to generate embedding for query".to_string())
@@ -109,5 +109,15 @@ impl KnowledgeBase {
         let ids: Vec<i64> = result.into_iter().map(|(id, _)| id as i64).collect();
         
         self.storage.get_chunks_by_ids(&ids)
+    }
+
+    // --- Pass-through methods to Storage ---
+
+    pub fn list_sources(&self) -> Result<Vec<String>, LLMCoreError> {
+        self.storage.list_sources()
+    }
+
+    pub fn get_full_document(&self, url: &str) -> Result<Vec<DocumentChunk>, LLMCoreError> {
+        self.storage.get_full_document(url)
     }
 }

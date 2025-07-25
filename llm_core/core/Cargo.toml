@@ -15,6 +15,7 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 # Async runtime and utilities
 tokio = { version = "1.38.0", features = ["rt", "rt-multi-thread", "macros", "fs"] }
+futures = "0.3"
 
 # Date and time handling
 chrono = { version = "0.4.41", features = ["serde"] }

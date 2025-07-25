@@ -71,9 +71,9 @@ impl Embedder {
 
     /// Generates embeddings for a list of texts.
     pub async fn get_embeddings(
-        &self,
-        texts: Vec<String>,
-    ) -> Result<Vec<Vec<f32>>, LLMCoreError> {
+            &self,
+            texts: Vec<String>,
+        ) -> Result<Vec<Vec<f32>>, LLMCoreError> {
         let payload = self
             .provider_adapter
             .prepare_embedding_request(&self.model_tag, texts);

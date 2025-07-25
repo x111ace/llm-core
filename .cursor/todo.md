@@ -1,6 +1,6 @@
 # To-Do List: LLM Core Upgrades:
 
-Google Models:
+Check out these Google Models:
 - models/embedding-gecko-001
 - models/gemini-1.0-pro-vision-latest
 - models/gemini-pro-vision

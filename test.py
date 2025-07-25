@@ -249,9 +249,97 @@ def schema_chat():
 
 
 
+### ### ###
+
+KB_DIR = "llm_core/core/tests/output/ingestion_kb"
+DB_PATH = os.path.join(KB_DIR, "content.db")
+INDEX_PATH = os.path.join(KB_DIR, "vector_index")
+EMBEDDING_MODEL = "TEXT-EMB 3 SMALL"
+TEST_URL = "https://en.wikipedia.org/wiki/Artificial_intelligence"
+TEST_FILE = "llm_core/core/tests/output/test_ingestion_doc.md"
+
+def setup_test_environment():
+    """Create necessary directories and a dummy file for ingestion."""
+    os.makedirs(KB_DIR, exist_ok=True)
+    os.makedirs("llm_core/core/tests/output", exist_ok=True)
+    
+    # Clean up old files
+    if os.path.exists(DB_PATH):
+        os.remove(DB_PATH)
+    if os.path.exists(INDEX_PATH):
+        # Arroy creates a directory, not a single file
+        import shutil
+        shutil.rmtree(INDEX_PATH)
+
+    # Create a dummy markdown file to ingest
+    with open(TEST_FILE, "w") as f:
+        f.write("# Local File Test\n\nThis is a test document about local file ingestion.")
+
+def ingest():
+    """
+    Demonstrates the user-controlled ingestion and retrieval process.
+    """
+    print("--- 1. Setting up the test environment ---")
+    setup_test_environment()
+
+    print("\n--- 2. Initializing the Ingestor ---")
+    try:
+        ingestor = llm_core.Ingestor(DB_PATH, INDEX_PATH, EMBEDDING_MODEL)
+        print("Ingestor created successfully.")
+    except Exception as e:
+        print(f"Failed to create Ingestor: {e}")
+        return
+
+    print("\n--- 3. Ingesting data from a URL ---")
+    try:
+        ingestor.ingest_from_url(TEST_URL, "wikipedia_ai")
+        print(f"Successfully started ingestion for URL: {TEST_URL}")
+    except Exception as e:
+        print(f"Error during URL ingestion: {e}")
+
+    print("\n--- 4. Ingesting data from a local file ---")
+    try:
+        ingestor.ingest_from_file(TEST_FILE, "local_test_doc")
+        print(f"Successfully started ingestion for file: {TEST_FILE}")
+    except Exception as e:
+        print(f"Error during file ingestion: {e}")
+
+    # Note: In a real application, you might ingest many documents before building
+    # the knowledge base. For this demo, we proceed directly to verification.
+
+    print("\n--- 5. Initializing KnowledgeBase to verify ingestion ---")
+    try:
+        kb = llm_core.KnowledgeBase(DB_PATH, INDEX_PATH, EMBEDDING_MODEL)
+        print("KnowledgeBase created successfully.")
+    except Exception as e:
+        print(f"Failed to create KnowledgeBase: {e}")
+        return
+        
+    print("\n--- 6. Searching for content from the URL ---")
+    try:
+        search_results_url = kb.search("What is a neural network?", 3)
+        print(f"Found {len(search_results_url)} results for URL query.")
+        assert len(search_results_url) > 0, "Should find results from URL."
+        for res in search_results_url:
+            print(f"  - (Chunk {res['chunk_number']}) {res['content'][:100]}...")
+    except Exception as e:
+        print(f"Error during URL search: {e}")
+
+    print("\n--- 7. Searching for content from the local file ---")
+    try:
+        search_results_file = kb.search("local file", 1)
+        print(f"Found {len(search_results_file)} results for file query.")
+        assert len(search_results_file) > 0, "Should find results from file."
+        for res in search_results_file:
+            print(f"  - (Chunk {res['chunk_number']}) {res['content'][:100]}...")
+    except Exception as e:
+        print(f"Error during file search: {e}")
+        
+    print("\n--- ✅ Ingestion and verification complete! ---")
 
 ### ### ###
 
+# Tool function
 def get_user_info() -> dict:
     """
     A simple Python tool that simulates fetching a hardcoded user profile
@@ -267,6 +355,7 @@ def get_user_info() -> dict:
 
 ### ### ###
 
+# Tool schema
 def tool_defs():
     """
     Defines the tools that the agent can use.

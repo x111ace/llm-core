@@ -8,10 +8,12 @@ pub mod convo;
 pub mod datam;
 pub mod embed;
 pub mod error;
+pub mod ingest;
 pub mod lucky;
 pub mod modes;
 pub mod orchestra;
 pub mod providers;
+pub mod retrieval;
 pub mod sorter;
 pub mod tools;
 pub mod usage;
@@ -30,6 +32,8 @@ fn _llm_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<bindings::python_b::PySchemaProperty>()?;
     m.add_class::<bindings::python_b::PySchemaItems>()?;
     m.add_class::<bindings::python_b::PySortingInstructions>()?;
+    m.add_class::<bindings::python_b::PyKnowledgeBase>()?;
+    m.add_class::<bindings::python_b::PyIngestor>()?;
     m.add_function(wrap_pyfunction!(bindings::python_b::run_sorter, m)?)?;
     Ok(())
 }

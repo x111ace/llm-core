@@ -15,6 +15,8 @@ from _llm_core import (
     SortingInstructions,
     Tool,
     ToolDefinition,
+    Ingestor,
+    KnowledgeBase,
 )
 
 # Define what gets imported with a `from llm_core import *`
@@ -28,4 +30,6 @@ __all__ = [
     "SortingInstructions",
     "Tool",
     "ToolDefinition",
+    "Ingestor",
+    "KnowledgeBase",
 ]

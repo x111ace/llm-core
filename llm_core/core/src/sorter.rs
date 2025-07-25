@@ -19,6 +19,8 @@ use crate::datam::{
 };
 use crate::lucky::{SimpleSchema, SchemaProperty, SchemaItems};
 use crate::error::LLMCoreError;
+use tokio::runtime::Runtime;
+use serde_json::json;
 
 // --- Data Structures ---
 
@@ -607,5 +609,104 @@ impl Sorter {
         total_usage += sort_usage;
         Ok((sorted_items, updated_categories, total_usage, item_count))
     }
+}
+
+// --- Tool Entry Point ---
+
+pub fn sort_data_items_tool(args: JsonValue) -> Result<JsonValue, String> {
+    let rt = Runtime::new().map_err(|e| format!("Failed to create Tokio runtime: {}", e))?;
+    rt.block_on(async {
+        let input_path_str = args["input_path"].as_str();
+        let items_list_val = args.get("items_list");
+
+        if input_path_str.is_none() && items_list_val.is_none() {
+            return Err("Either 'input_path' or 'items_list' must be provided.".to_string());
+        }
+
+        let guidelines = args["item_sorting_guidelines"]
+            .as_array()
+            .map(|v| v.iter().filter_map(|s| s.as_str().map(String::from)).collect())
+            .unwrap_or_default();
+
+        let description = args["data_profile_description"].as_str().unwrap_or("").to_string();
+
+        let instructions = SortingInstructions {
+            data_item_name: args["data_item_name"].as_str().unwrap_or("Data Item").to_string(),
+            data_profile_description: description,
+            item_sorting_guidelines: guidelines,
+            provided_categories: vec![], // No longer required
+        };
+
+        let model_name = args["model_name"].as_str().unwrap_or("GPT 4o MINI");
+        let output_path = args["output_path"].as_str().map(PathBuf::from);
+        let swarm_size = args["swarm_size"].as_u64().unwrap_or(5) as usize;
+        
+        let orchestra = Arc::new(
+            Orchestra::new(model_name, None, None, None, None, Some(true))
+                .map_err(|e| e.to_string())?,
+        );
+
+        let items_list = if let Some(list_val) = items_list_val {
+            serde_json::from_value::<Vec<String>>(list_val.clone()).ok()
+        } else { None };
+
+        let input_path = input_path_str.map(PathBuf::from);
+
+        let initial_result = Sorter::run_sorting_task(
+            Arc::clone(&orchestra),
+            input_path.clone(),
+            items_list.clone(),
+            output_path.clone(),
+            instructions.clone(),
+            swarm_size,
+            true, // debug
+        )
+        .await;
+
+        match initial_result {
+            Ok((sorted_items, updated_categories, total_usage, item_count)) => {
+                Ok(json!({
+                    "message": "Sorting completed successfully.",
+                    "items_sorted": item_count,
+                    "categories_used": updated_categories,
+                    "output_summary": format!("{} items were sorted into {} categories.", item_count, sorted_items.keys().len()),
+                    "usage": total_usage,
+                }))
+            }
+            Err(e) => {
+                if let crate::error::LLMCoreError::IoError(io_error) = &e {
+                    if output_path.is_some() {
+                        eprintln!(
+                            "Warning: Failed to write to '{}' due to: {}. Falling back to default directory.",
+                            output_path.unwrap().display(),
+                            io_error
+                        );
+
+                        let (sorted_items, updated_categories, total_usage, item_count) =
+                            Sorter::run_sorting_task(
+                                orchestra,
+                                input_path,
+                                items_list,
+                                None, // Fallback to default path
+                                instructions,
+                                swarm_size,
+                                true, // debug
+                            )
+                            .await
+                            .map_err(|e| e.to_string())?;
+
+                        return Ok(json!({
+                            "message": "Sorting completed, but failed to save to the specified path. The file was saved to the default application directory instead.",
+                            "items_sorted": item_count,
+                            "categories_used": updated_categories,
+                            "output_summary": format!("{} items were sorted into {} categories.", item_count, sorted_items.keys().len()),
+                            "usage": total_usage,
+                        }));
+                    }
+                }
+                Err(e.to_string())
+            }
+        }
+    })
 }
 

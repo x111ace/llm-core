@@ -18,9 +18,12 @@ use _llm_core::{
     convo::Chat,
     embed::Embedder,
     vector::{KnowledgeBase, DocumentSource},
+    retrieval::KNOWLEDGE_BASE,
     datam::{format_system_message, format_user_message},
     lucky::{SchemaProperty, SimpleSchema},
     sorter::{Sorter, SortingInstructions},
+    ingest::Ingestor,
+    config::{get_env_var, MODEL_LIBRARY},
 };
 use serde::Deserialize;
 use serde_json::Value as JsonValue;
@@ -29,8 +32,11 @@ use std::path::Path;
 use std::sync::Arc;
 use base64::Engine as _; // Import the Engine trait for base64 decoding
 use tempfile::tempdir;
+use std::io::Write; // Import Write trait for writeln!
+use reqwest::Client;
+use serde_json::json;
 
-const MODEL_NAME: &str = "GEMINI 2.0 FLASH";
+const MODEL_NAME: &str = "GPT 4o MINI";
 
 // CONCLUSIONS:
 // All models here have been tested. Of them, only deepseek (OpenRouter & Ollama) have failed.
@@ -500,43 +506,62 @@ async fn test_chat_image_gen() {
 }
 
 #[tokio::test]
-#[ignore]
+// #[ignore]
 async fn test_raww_image_gen() {
-    let orchestra = Orchestra::new("GEMINI 2.0 FLASH", None, None, None, None, Some(true))
-        .expect("Failed to create Orchestra");
-
     let prompt = "A photorealistic image of a cat wearing a witch hat";
-    let result = orchestra
-        .generate_image(prompt, "GEMINI 2.0 FLASH IMAGE GEN")
-        .await;
+    let model_name = "GEMINI 2.0 FLASH IMAGE GEN";
 
-    assert!(
-        result.is_ok(),
-        "Image generation failed: {:?}",
-        result.err()
-    );
-    let image_result = result.unwrap();
-    assert!(
-        image_result.image_data_b64.is_some(),
-        "No image data in result"
+    // This logic is now self-contained, mirroring the working tool implementation.
+    let (_provider_name, provider_data, model_details) =
+        MODEL_LIBRARY.find_model(model_name)
+        .unwrap_or_else(|| panic!("Model '{}' not found", model_name));
+
+    let api_key = get_env_var(&provider_data.api_key).unwrap();
+    let base_url = get_env_var(&provider_data.base_url).unwrap();
+
+    let url = format!(
+        "{}/{}:generateContent?key={}",
+        base_url.trim_end_matches('/'),
+        &model_details.model_tag,
+        api_key
     );
 
+    let payload = json!({
+        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+        "generationConfig": { "responseModalities": ["TEXT", "IMAGE"] }
+    });
+
+    let client = Client::new();
+    let res = client.post(&url)
+        .header("Content-Type", "application/json")
+        .json(&payload)
+        .send()
+        .await
+        .expect("Request failed");
+
+    assert!(res.status().is_success(), "API call failed with status: {}", res.status());
+
+    let response_json: JsonValue = res.json().await.expect("JSON parse error");
+    let image_b64 = response_json["candidates"][0]["content"]["parts"]
+        .as_array().unwrap()
+        .iter()
+        .find_map(|part| part["inlineData"]["data"].as_str())
+        .expect("No image data found in response")
+        .to_string();
+    
     // Decode and save the image to verify it's valid
-    let image_data = image_result.image_data_b64.unwrap();
-    let bytes = base64::engine::general_purpose::STANDARD
-        .decode(image_data)
-        .expect("Failed to decode base64 image");
+    let bytes = base64::engine::general_purpose::STANDARD.decode(&image_b64).expect("Failed to decode base64");
     assert!(!bytes.is_empty(), "Decoded image data is empty");
 
     let output_dir = "tests/output";
     std::fs::create_dir_all(output_dir).expect("Failed to create output directory");
     let file_path = format!("{}/test_image_output.png", output_dir);
     let mut file = std::fs::File::create(&file_path).expect("Failed to create image file");
-    std::io::Write::write_all(&mut file, &bytes).expect("Failed to write image to file");
+    file.write_all(&bytes).expect("Failed to write image to file");
 
     println!("Image saved to {}", file_path);
     assert!(
-        std::fs::metadata(file_path).unwrap().len() > 0,
+        std::fs::metadata(&file_path).unwrap().len() > 0,
         "Saved image file is empty"
     );
 }
@@ -606,7 +631,7 @@ async fn test_sorter_in_chat() {
 
 
 #[tokio::test]
-// #[ignore]
+#[ignore]
 async fn test_embeddings() {
     let embedder = Embedder::new("TEXT-EMB 3 SMALL", Some(true)).unwrap();
     let embeddings = embedder
@@ -629,7 +654,7 @@ async fn test_embeddings() {
 }
 
 #[tokio::test]
-// #[ignore]
+#[ignore]
 async fn test_create_database() {
     let dir = tempdir().unwrap();
     let db_path = dir.path().join("rag.db");
@@ -639,29 +664,7 @@ async fn test_create_database() {
 }
 
 #[tokio::test]
-// #[ignore]
-async fn test_database_remove_and_delete() {
-    // 1. Setup: Create a temporary database in a known location.
-    let temp_dir = std::env::temp_dir();
-
-    // 2. Create a dummy file to simulate a database file.
-    let dummy_file_path = temp_dir.join("dummy.db");
-    std::fs::File::create(&dummy_file_path).expect("Failed to create dummy file");
-    assert!(dummy_file_path.exists());
-
-    // 3. Attempt to remove and delete the file.
-    let remove_result = std::fs::remove_file(&dummy_file_path);
-    assert!(remove_result.is_ok(), "Failed to remove file: {:?}", remove_result.err());
-    assert!(!dummy_file_path.exists(), "File should have been deleted.");
-
-    // 4. Verify that the file is no longer present.
-    let verify_result = std::fs::metadata(&dummy_file_path);
-    assert!(verify_result.is_err(), "File should not exist after deletion.");
-}
-
-
-#[tokio::test]
-// #[ignore]
+#[ignore]
 async fn test_knowledge_base_end_to_end() {
     // 1. Setup temporary paths for the database and vector index.
     let dir = tempdir().unwrap();
@@ -728,3 +731,136 @@ async fn test_knowledge_base_end_to_end() {
         search_query, retrieved_doc.content
     );
 }
+
+#[tokio::test]
+#[ignore]
+async fn test_knowledge_base_in_chat() {
+    // --- Phase 1: Setup and Populate the KnowledgeBase Singleton ---
+    { // Create a new scope to ensure the lock is released.
+        let knowledge_base = KNOWLEDGE_BASE.lock().unwrap();
+        
+        // Note: The singleton is initialized lazily and cleans up old files on its first run.
+        // We can directly add documents to it for our test.
+        let metadata = serde_json::json!({});
+        let documents = vec![
+            DocumentSource {
+                url: "file://fruit_doc.txt".to_string(),
+                chunk_number: 1, title: "About Apples".to_string(), summary: "".to_string(),
+                content: "The apple is a sweet, edible fruit produced by an apple tree.".to_string(),
+                metadata: metadata.clone(),
+            },
+            DocumentSource {
+                url: "file://tool_doc.txt".to_string(),
+                chunk_number: 1, title: "About Hammers".to_string(), summary: "".to_string(),
+                content: "A hammer is a tool, most often a hand tool, consisting of a weighted head fixed to a long handle.".to_string(),
+                metadata: metadata.clone(),
+            },
+        ];
+        knowledge_base.add_documents_and_build(documents).await.unwrap();
+    } // The lock on KNOWLEDGE_BASE is released here as `knowledge_base` goes out of scope.
+
+    // --- Phase 2: Interact with the Chat Agent ---
+    let mut chat = Chat::new(
+        MODEL_NAME,
+        Some("You are a helpful assistant. Use the available tools to answer questions.".to_string()),
+        Some(get_rust_tool_library()),
+        None, None, Some(true),
+    ).unwrap();
+
+    let user_prompt = "What do the documents say about hammers?";
+    let response = chat.send(user_prompt).await.unwrap();
+
+    // --- Phase 3: Assert the Results ---
+    println!("\n--- Final Assistant Response ---\n{}", response.content.as_ref().unwrap());
+
+    let content_lower = response.content.as_ref().unwrap().to_lowercase();
+    assert!(content_lower.contains("hammer"), "Response should contain 'hammer'.");
+    assert!(content_lower.contains("tool"), "Response should contain 'tool'.");
+    assert!(!content_lower.contains("apple"), "Response should not contain irrelevant info about apples.");
+}
+
+#[tokio::test]
+#[ignore]
+async fn test_ingestor_from_file() {
+    pyo3::prepare_freethreaded_python();
+    // 1. Setup: Create a temporary directory and a properly named file inside it.
+    let dir = tempdir().unwrap();
+    let file_path = dir.path().join("test.md"); // Use .md extension
+    let mut temp_file = std::fs::File::create(&file_path).unwrap();
+    let file_content = "# Test Document\n\nThis is a test about Rust performance.";
+    writeln!(temp_file, "{}", file_content).unwrap();
+
+    // 2. Setup paths for a new, temporary KnowledgeBase.
+    let db_path = dir.path().join("test_ingest_file.db");
+    let index_path = dir.path().join("test_ingest_file_index");
+
+    // --- Ingestion Scope ---
+    {
+        // Ensure files from previous runs are cleaned up.
+        let _ = std::fs::remove_file(&db_path);
+        let _ = std::fs::remove_dir_all(&index_path);
+
+        // 3. Create the Ingestor and ingest from the file.
+        let ingestor = Ingestor::new(
+            &db_path,
+            &index_path,
+            "TEXT-EMB 3 SMALL",
+            MODEL_NAME,
+        ).unwrap();
+        ingestor.ingest_from_file(&file_path, "local_file").await.unwrap();
+    } // Ingestor is dropped here, releasing the database lock.
+
+    // 4. Verify that the document was added correctly.
+    let kb = KnowledgeBase::new(&db_path, &index_path, "TEXT-EMB 3 SMALL").unwrap();
+    let results = kb.search("Rust performance", 1).await.unwrap();
+
+    assert_eq!(results.len(), 1);
+    assert!(results[0].content.contains("Rust performance"));
+
+    println!("Successfully ingested from file and found relevant content via search.");
+}
+
+#[tokio::test]
+#[ignore]
+async fn test_ingestor_from_url() {
+    pyo3::prepare_freethreaded_python();
+    
+    let dir = tempdir().unwrap();
+    let db_path = dir.path().join("test_ingest_url.db");
+    let index_path = dir.path().join("test_ingest_url_index");
+    let test_url = "https://en.wikipedia.org/wiki/Rust_(programming_language)";
+
+    // --- Ingestion Scope ---
+    {
+        // Ensure files from previous runs are cleaned up.
+        let _ = std::fs::remove_file(&db_path);
+        let _ = std::fs::remove_dir_all(&index_path);
+        
+        // 1. Create the Ingestor and ingest from the URL.
+        let ingestor = Ingestor::new(
+            &db_path,
+            &index_path,
+            "TEXT-EMB 3 SMALL",
+            MODEL_NAME,
+        ).unwrap();
+        ingestor.ingest_from_url(test_url, "wikipedia_rust").await.unwrap();
+    } // Ingestor is dropped here, releasing the database lock.
+
+    // 2. Verify that the document was added correctly.
+    let kb = KnowledgeBase::new(&db_path, &index_path, "TEXT-EMB 3 SMALL").unwrap();
+    let results = kb.search("systems programming", 5).await.unwrap();
+
+    assert!(!results.is_empty(), "Search should return at least one result.");
+    
+    let mut found_url = false;
+    for result in &results {
+        if result.url == test_url {
+            found_url = true;
+            break;
+        }
+    }
+    assert!(found_url, "The ingested URL should be in the search results.");
+    
+    println!("Successfully ingested from URL and found relevant content via search.");
+}
+

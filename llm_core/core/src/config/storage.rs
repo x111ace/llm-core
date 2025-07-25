@@ -20,7 +20,6 @@ pub struct DocumentChunk {
 
 /// Manages a SQLite database for storing and retrieving document chunks.
 pub struct Storage {
-    conn: Connection,
     db_path: PathBuf,
 }
 
@@ -29,14 +28,18 @@ impl Storage {
         if let Some(parent) = db_path.parent() {
             fs::create_dir_all(parent)?;
         }
-        let conn = Connection::open(db_path)?;
-        let storage = Self { conn, db_path: db_path.to_path_buf() };
+        let storage = Self { db_path: db_path.to_path_buf() };
         storage.initialize_db()?;
         Ok(storage)
     }
+
+    fn get_conn(&self) -> Result<Connection, LLMCoreError> {
+        Connection::open(&self.db_path).map_err(Into::into)
+    }
     
     fn initialize_db(&self) -> Result<(), LLMCoreError> {
-        self.conn.execute(
+        let conn = self.get_conn()?;
+        conn.execute(
             "CREATE TABLE IF NOT EXISTS document_chunks (
                 id INTEGER PRIMARY KEY, url TEXT NOT NULL, chunk_number INTEGER NOT NULL,
                 title TEXT NOT NULL, summary TEXT NOT NULL, content TEXT NOT NULL,
@@ -54,8 +57,9 @@ impl Storage {
             content: &str, metadata: &serde_json::Value,
         ) -> Result<i64, LLMCoreError> {
         let metadata_str = serde_json::to_string(metadata)?;
+        let conn = self.get_conn()?;
 
-        let mut stmt = self.conn.prepare(
+        let mut stmt = conn.prepare(
             "INSERT INTO document_chunks (url, chunk_number, title, summary, content, metadata)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)"
         )?;
@@ -64,7 +68,8 @@ impl Storage {
     }
 
     pub fn get_chunk_by_id(&self, id: i64) -> Result<Option<DocumentChunk>, LLMCoreError> {
-        let mut stmt = self.conn.prepare("SELECT id, url, chunk_number, title, summary, content, metadata, created_at FROM document_chunks WHERE id = ?1")?;
+        let conn = self.get_conn()?;
+        let mut stmt = conn.prepare("SELECT id, url, chunk_number, title, summary, content, metadata, created_at FROM document_chunks WHERE id = ?1")?;
         let mut chunk_iter = stmt.query_map(params![id], |row| {
             let metadata = serde_json::from_str(&row.get::<_, String>(6)?).unwrap_or(serde_json::Value::Null);
             let created_at = DateTime::parse_from_rfc3339(&row.get::<_, String>(7)?).unwrap().with_timezone(&Utc);
@@ -86,12 +91,13 @@ impl Storage {
         if ids.is_empty() {
             return Ok(Vec::new());
         }
+        let conn = self.get_conn()?;
         let params_sql = vec!["?"; ids.len()].join(",");
         let sql = format!(
             "SELECT id, url, chunk_number, title, summary, content, metadata, created_at FROM document_chunks WHERE id IN ({})",
             params_sql
         );
-        let mut stmt = self.conn.prepare(&sql)?;
+        let mut stmt = conn.prepare(&sql)?;
 
         let chunk_iter = stmt.query_map(rusqlite::params_from_iter(ids.iter()), |row| {
             let metadata = serde_json::from_str(&row.get::<_, String>(6)?).unwrap_or(serde_json::Value::Null);
@@ -122,21 +128,60 @@ impl Storage {
         Ok(ordered_chunks)
     }
 
+    /// Retrieves all unique source URLs from the database.
+    pub fn list_sources(&self) -> Result<Vec<String>, LLMCoreError> {
+        let conn = self.get_conn()?;
+        let mut stmt = conn.prepare("SELECT DISTINCT url FROM document_chunks ORDER BY url")?;
+        let mut rows = stmt.query([])?;
+        let mut urls = Vec::new();
+        while let Some(row) = rows.next()? {
+            urls.push(row.get(0)?);
+        }
+        Ok(urls)
+    }
+
+    /// Retrieves all chunks for a specific URL, ordered by their chunk number.
+    pub fn get_full_document(&self, url: &str) -> Result<Vec<DocumentChunk>, LLMCoreError> {
+        let conn = self.get_conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, url, chunk_number, title, summary, content, metadata, created_at 
+             FROM document_chunks WHERE url = ?1 ORDER BY chunk_number ASC"
+        )?;
+        let chunk_iter = stmt.query_map(params![url], |row| {
+            let metadata = serde_json::from_str(&row.get::<_, String>(6)?).unwrap_or(serde_json::Value::Null);
+            let created_at = DateTime::parse_from_rfc3339(&row.get::<_, String>(7)?).unwrap().with_timezone(&Utc);
+
+            Ok(DocumentChunk {
+                id: row.get(0)?,
+                url: row.get(1)?,
+                chunk_number: row.get(2)?,
+                title: row.get(3)?,
+                summary: row.get(4)?,
+                content: row.get(5)?,
+                metadata,
+                created_at,
+            })
+        })?;
+
+        let mut chunks = Vec::new();
+        for result in chunk_iter {
+            chunks.push(result?);
+        }
+        Ok(chunks)
+    }
+
     /// Removes a document chunk from the database by its unique ID.
     pub fn remove_chunk(&self, id: i64) -> Result<usize, LLMCoreError> {
-        let rows_affected = self.conn.execute("DELETE FROM document_chunks WHERE id = ?1", params![id])?;
+        let conn = self.get_conn()?;
+        let rows_affected = conn.execute("DELETE FROM document_chunks WHERE id = ?1", params![id])?;
         Ok(rows_affected)
     }
 
     /// Deletes the entire SQLite database file from the filesystem.
     /// This method consumes the Storage object, ensuring the file lock is released.
     pub fn delete_database(self) -> Result<(), LLMCoreError> {
-        // Deconstruct `self` to take ownership of its fields.
-        let Storage { conn, db_path } = self;
-        // Explicitly drop the connection. This closes the database and releases the file lock.
-        drop(conn);
-        // Now that the lock is released, we can safely delete the file.
-        fs::remove_file(&db_path)?;
+        // The connection is no longer stored in self, so we can just delete the file.
+        fs::remove_file(&self.db_path)?;
         Ok(())
     }
 }

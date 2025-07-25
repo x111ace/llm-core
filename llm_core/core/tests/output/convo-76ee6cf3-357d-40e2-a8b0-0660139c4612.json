@@ -1,0 +1,47 @@
+{
+  "id": "76ee6cf3-357d-40e2-a8b0-0660139c4612",
+  "model_name": "GPT 4o MINI",
+  "title": "Untitled Conversation",
+  "created_at": "2025-07-24T23:09:17.481687500Z",
+  "updated_at": "2025-07-24T23:09:21.731168600Z",
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are a helpful assistant who remembers details from the conversation."
+    },
+    {
+      "role": "user",
+      "content": "Hi! My name is Ace."
+    },
+    {
+      "role": "assistant",
+      "content": "Hi Ace! It's great to meet you. How can I assist you today?"
+    },
+    {
+      "role": "user",
+      "content": "What is the capital of France?"
+    },
+    {
+      "role": "assistant",
+      "content": "The capital of France is Paris. Would you like to know more about Paris or something else?"
+    },
+    {
+      "role": "user",
+      "content": "What is my name?"
+    },
+    {
+      "role": "assistant",
+      "content": "Your name is Ace. How can I assist you further, Ace?"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 184,
+    "completion_tokens": 49,
+    "total_tokens": 233,
+    "cost": {
+      "input_price": 0.15,
+      "output_price": 0.6,
+      "total": 0.000057000005
+    }
+  }
+}

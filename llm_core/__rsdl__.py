@@ -91,18 +91,23 @@ def create_env(use_conda: bool = True, env_name_str: str = 'llm_core'):
         return _create_venv()
 
 def install_deps(python_exe: str):
-    """Installs maturin into the specified Python environment."""
-    print("Installing Python dependencies (maturin)...")
+    """Installs Python dependencies from require.txt."""
+    requirements_path = os.path.join(SCRIPT_DIR, "require.txt")
+    if not os.path.exists(requirements_path):
+        print(f"Error: requirements file not found at {requirements_path}", file=sys.stderr)
+        return False
+
+    print("Installing Python dependencies from require.txt...")
     try:
         is_windows = sys.platform == "win32"
         subprocess.run(
-            [python_exe, "-m", "pip", "install", "maturin"], 
-            check=True, capture_output=True, shell=is_windows, text=True, encoding='utf-8'
+            [python_exe, "-m", "pip", "install", "-r", requirements_path],
+            check=True, shell=is_windows
         )
-        print("Successfully installed maturin.")
+        print("Successfully installed Python dependencies.")
         return True
     except subprocess.CalledProcessError as e:
-        print(f"Error installing maturin: {e.stderr}", file=sys.stderr)
+        print(f"Error installing dependencies: {e.stderr}", file=sys.stderr)
         return False
 
 def install_rust_lib(python_exe: str, env_type: str, env_path: str):
@@ -127,7 +132,6 @@ def install_rust_lib(python_exe: str, env_type: str, env_path: str):
         print("Successfully installed Rust library.")
     except subprocess.CalledProcessError as e:
         print(f"Error installing Rust library: {e}", file=sys.stderr)
-
 
 def validate_installation(python_exe: str, env_type: str, env_path: str):
     """
@@ -183,6 +187,7 @@ def remove_project_artifacts():
                 except OSError as e:
                     print(f"Could not remove file {file_path}: {e}", file=sys.stderr)
 
+def remove_conda_env():
     # Attempt to remove the named Conda environment
     env_name = "llm_core_venv"
     print(f"Attempting to remove Conda environment '{env_name}'...")
@@ -207,7 +212,8 @@ def remove_project_artifacts():
 def main():
     parser = argparse.ArgumentParser(description="Manage the llm_core project setup.")
     parser.add_argument("-i", "--install", action="store_true", help="Create environment and install all dependencies.")
-    parser.add_argument("-r", "--remove", action="store_true", help="Remove all build artifacts and the virtual environment.")
+    parser.add_argument("-r", "--remove", action="store_true", help="Remove all build artifacts.")
+    parser.add_argument("-t", "--total", action="store_true", help="Remove all build artifacts and the virtual environment.")
     parser.add_argument("--no-conda", action="store_true", help="Force the use of venv even if Conda is available.")
     args = parser.parse_args()
 
@@ -237,6 +243,9 @@ def main():
 
     elif args.remove:
         remove_project_artifacts()
+    elif args.total:
+        remove_project_artifacts()
+        remove_conda_env()
     else:
         parser.print_help()
 

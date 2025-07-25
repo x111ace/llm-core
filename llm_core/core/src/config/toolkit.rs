@@ -5,24 +5,25 @@ use crate::config::{get_env_var, MODEL_LIBRARY};
 use base64::engine::{general_purpose::STANDARD as BASE64, Engine as _};
 use serde_json::{json, Value as JsonValue};
 use reqwest::blocking::Client;
-use tokio::runtime::Runtime;
-use std::path::PathBuf;
 use std::path::Path;
-use std::sync::Arc;
 use std::io::Write;
 use std::fs::File;
 use uuid::Uuid;
 
 // --- Imports for the new Sorter Tool ---
-use crate::sorter::{Sorter, SortingInstructions};
-use crate::orchestra::Orchestra;
+use crate::sorter::sort_data_items_tool;
 
+// --- Imports for the new KnowledgeBase Tools ---
+use crate::retrieval::{
+    knowledge_base_get_full_document, knowledge_base_list_sources, knowledge_base_search,
+};
 
 /// Returns a `ToolLibrary` containing all the natively implemented Rust tools.
 pub fn get_rust_tool_library() -> ToolLibrary {
     let mut tool_library = ToolLibrary::new();
 
     // --- get_current_time tool ---
+
     fn get_current_time(_args: JsonValue) -> Result<JsonValue, String> {
         use chrono::Local;
         let now = Local::now();
@@ -31,6 +32,7 @@ pub fn get_rust_tool_library() -> ToolLibrary {
     }
 
     // --- generate_image tool (Refactored to be self-contained and synchronous) ---
+    
     fn generate_image(args: JsonValue) -> Result<JsonValue, String> {
         let prompt = args["prompt"]
             .as_str()
@@ -136,110 +138,7 @@ pub fn get_rust_tool_library() -> ToolLibrary {
         }
     }
 
-    // --- sort_data_items Tool ---
-    fn sort_data_items_tool(args: JsonValue) -> Result<JsonValue, String> {
-        let rt = Runtime::new().map_err(|e| format!("Failed to create Tokio runtime: {}", e))?;
-        rt.block_on(async {
-            let input_path_str = args["input_path"].as_str();
-            let items_list_val = args.get("items_list");
-
-            if input_path_str.is_none() && items_list_val.is_none() {
-                return Err("Either 'input_path' or 'items_list' must be provided.".to_string());
-            }
-
-            let guidelines = args["item_sorting_guidelines"]
-                .as_array()
-                .map(|v| v.iter().filter_map(|s| s.as_str().map(String::from)).collect())
-                .unwrap_or_default();
-
-            let description = args["data_profile_description"].as_str().unwrap_or("").to_string();
-
-            // All instructions are now optional. The Sorter will rely on the AI's
-            // general intelligence if no specific guidelines are provided.
-
-            let instructions = SortingInstructions {
-                data_item_name: args["data_item_name"].as_str().unwrap_or("Data Item").to_string(),
-                data_profile_description: description,
-                item_sorting_guidelines: guidelines,
-                provided_categories: vec![], // No longer required
-            };
-
-            let model_name = args["model_name"].as_str().unwrap_or("GPT 4o MINI");
-            let output_path = args["output_path"].as_str().map(PathBuf::from);
-            let swarm_size = args["swarm_size"].as_u64().unwrap_or(5) as usize;
-            
-            let orchestra = Arc::new(
-                Orchestra::new(model_name, None, None, None, None, Some(true))
-                    .map_err(|e| e.to_string())?,
-            );
-
-            let items_list = if let Some(list_val) = items_list_val {
-                serde_json::from_value::<Vec<String>>(list_val.clone()).ok()
-            } else { None };
-
-            let input_path = input_path_str.map(PathBuf::from);
-
-            // --- New: Logic with Fallback ---
-            let initial_result = Sorter::run_sorting_task(
-                Arc::clone(&orchestra),
-                input_path.clone(),
-                items_list.clone(),
-                output_path.clone(),
-                instructions.clone(),
-                swarm_size,
-                true, // debug
-            )
-            .await;
-
-            match initial_result {
-                Ok((sorted_items, updated_categories, total_usage, item_count)) => {
-                    Ok(json!({
-                        "message": "Sorting completed successfully.",
-                        "items_sorted": item_count,
-                        "categories_used": updated_categories,
-                        "output_summary": format!("{} items were sorted into {} categories.", item_count, sorted_items.keys().len()),
-                        "usage": total_usage,
-                    }))
-                }
-                Err(e) => {
-                    // Check if the error is an I/O error AND if the user specified a path.
-                    if let crate::error::LLMCoreError::IoError(io_error) = &e {
-                        if output_path.is_some() {
-                            eprintln!(
-                                "Warning: Failed to write to '{}' due to: {}. Falling back to default directory.",
-                                output_path.unwrap().display(),
-                                io_error
-                            );
-
-                            // Retry the task with the default path (by passing None).
-                            let (sorted_items, updated_categories, total_usage, item_count) =
-                                Sorter::run_sorting_task(
-                                    orchestra,
-                                    input_path,
-                                    items_list,
-                                    None, // Fallback to default path
-                                    instructions,
-                                    swarm_size,
-                                    true, // debug
-                                )
-                                .await
-                                .map_err(|e| e.to_string())?;
-
-                            return Ok(json!({
-                                "message": "Sorting completed, but failed to save to the specified path. The file was saved to the default application directory instead.",
-                                "items_sorted": item_count,
-                                "categories_used": updated_categories,
-                                "output_summary": format!("{} items were sorted into {} categories.", item_count, sorted_items.keys().len()),
-                                "usage": total_usage,
-                            }));
-                        }
-                    }
-                    // If it's not an I/O error or no path was specified, fail as before.
-                    Err(e.to_string())
-                }
-            }
-        })
-    }
+    // --- KnowledgeBase Tools ---
 
     tool_library.insert(
         "get_current_time".to_string(),
@@ -340,6 +239,75 @@ pub fn get_rust_tool_library() -> ToolLibrary {
                 },
             },
             function: sort_data_items_tool,
+        },
+    );
+
+    // --- KnowledgeBase Tools ---
+
+    tool_library.insert(
+        "knowledge_base_search".to_string(),
+        Tool::Rust {
+            definition: ToolDefinition {
+                tool_type: "function".to_string(),
+                function: FunctionDefinition {
+                    name: "knowledge_base_search".to_string(),
+                    description: "Searches the knowledge base for documents relevant to a query.".to_string(),
+                    parameters: json!({
+                        "type": "object",
+                        "properties": {
+                            "query": {
+                                "type": "string",
+                                "description": "The natural language query to search for."
+                            },
+                            "limit": {
+                                "type": "number",
+                                "description": "Optional. The maximum number of results to return. Defaults to 5."
+                            }
+                        },
+                        "required": ["query"]
+                    }),
+                },
+            },
+            function: knowledge_base_search,
+        },
+    );
+
+    tool_library.insert(
+        "knowledge_base_list_sources".to_string(),
+        Tool::Rust {
+            definition: ToolDefinition {
+                tool_type: "function".to_string(),
+                function: FunctionDefinition {
+                    name: "knowledge_base_list_sources".to_string(),
+                    description: "Lists all the unique document sources (URLs) available in the knowledge base.".to_string(),
+                    parameters: json!({"type": "object", "properties": {}}),
+                },
+            },
+            function: knowledge_base_list_sources,
+        },
+    );
+
+    tool_library.insert(
+        "knowledge_base_get_full_document".to_string(),
+        Tool::Rust {
+            definition: ToolDefinition {
+                tool_type: "function".to_string(),
+                function: FunctionDefinition {
+                    name: "knowledge_base_get_full_document".to_string(),
+                    description: "Retrieves the full, combined content of a specific document from the knowledge base.".to_string(),
+                    parameters: json!({
+                        "type": "object",
+                        "properties": {
+                            "url": {
+                                "type": "string",
+                                "description": "The exact URL of the document source to retrieve."
+                            }
+                        },
+                        "required": ["url"]
+                    }),
+                },
+            },
+            function: knowledge_base_get_full_document,
         },
     );
 

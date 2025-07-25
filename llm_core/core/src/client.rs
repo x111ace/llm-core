@@ -68,7 +68,7 @@ pub async fn execute_single_call(
                     }
                 }
                 // For other non-success statuses, return our new ApiError.
-                return Err(LLMCoreError::ApiError {
+                return Err(LLMCoreError::ApiErrorDetailed {
                     status: status.as_u16(),
                     body: response_text,
                 });
