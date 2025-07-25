@@ -11,13 +11,15 @@ Basic Ability:
 - Async Swarm Calling
 - Data Sorter Feature
 - Custom Thinker Mode
+- Local Vector SQL DB
 
 Agent Ability:
 - Structured Response
 - Native Tool Library
-    - Data Item Sorter
     - Get Current Time
     - Image Generation
+    - Data Item Sorter
+    - RAG Tool Calling
 
 ## Installation
 
